@@ -1,0 +1,254 @@
+package services
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"clinic-backend/models"
+
+	"gorm.io/gorm"
+)
+
+// ErrServiceDateNotFound is returned when no service date matches the given id.
+var ErrServiceDateNotFound = errors.New("service date not found")
+
+// ErrServiceDateInUse is returned when a service date cannot be mutated because
+// repair records already reference its room+date.
+var ErrServiceDateInUse = errors.New("service date has existing records and cannot be modified")
+
+// ErrServiceDateRoomNotFound is returned when the room referenced on create/update does not exist.
+var ErrServiceDateRoomNotFound = errors.New("room does not exist")
+
+// ServiceDateService contains the business logic for service date CRUD.
+type ServiceDateService struct {
+	db *gorm.DB
+}
+
+func NewServiceDateService(db *gorm.DB) *ServiceDateService {
+	return &ServiceDateService{db: db}
+}
+
+// CreateServiceDateInput carries the fields a caller may set on creation.
+// Server-controlled fields (ID) are not included.
+type CreateServiceDateInput struct {
+	Capacity  uint
+	RoomID    uint
+	Date      time.Time
+	StartTime time.Time
+	EndTime   time.Time
+	Title     string
+}
+
+// UpdateServiceDateInput uses pointers so omitted fields stay unchanged.
+type UpdateServiceDateInput struct {
+	Capacity  *uint
+	RoomID    *uint
+	Date      *time.Time
+	StartTime *time.Time
+	EndTime   *time.Time
+	Title     *string
+}
+
+// ListServiceDateFilter controls listing behavior.
+type ListServiceDateFilter struct {
+	RoomID      *uint
+	FromDate    time.Time // inclusive lower bound on date, zero means unbounded
+	ActiveOnly  bool      // date >= today
+	HasCapacity bool      // for students: booked count < capacity
+	Page        int
+	PageSize    int
+}
+
+func (s *ServiceDateService) Create(in CreateServiceDateInput) (models.ClinicServiceDate, error) {
+	if err := s.assertRoomExists(in.RoomID); err != nil {
+		return models.ClinicServiceDate{}, err
+	}
+	d := models.ClinicServiceDate{
+		Capacity:  in.Capacity,
+		RoomID:    &in.RoomID,
+		Date:      in.Date,
+		StartTime: in.StartTime,
+		EndTime:   in.EndTime,
+		Title:     in.Title,
+	}
+	if err := s.db.Create(&d).Error; err != nil {
+		return models.ClinicServiceDate{}, fmt.Errorf("create service date: %w", err)
+	}
+	return d, nil
+}
+
+func (s *ServiceDateService) GetByID(id uint) (models.ClinicServiceDate, error) {
+	var d models.ClinicServiceDate
+	if err := s.db.First(&d, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicServiceDate{}, ErrServiceDateNotFound
+		}
+		return models.ClinicServiceDate{}, fmt.Errorf("get service date %d: %w", id, err)
+	}
+	return d, nil
+}
+
+// assertRoomExists verifies the given room exists, returning ErrServiceDateRoomNotFound otherwise.
+func (s *ServiceDateService) assertRoomExists(roomID uint) error {
+	var n int64
+	if err := s.db.Model(&models.ClinicRoom{}).Where("id = ?", roomID).Count(&n).Error; err != nil {
+		return fmt.Errorf("check room %d: %w", roomID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("room %d: %w", roomID, ErrServiceDateRoomNotFound)
+	}
+	return nil
+}
+
+// recordsExistFor returns true if any repair record references the given room+date.
+func (s *ServiceDateService) recordsExistFor(tx *gorm.DB, roomID uint, date time.Time) (bool, error) {
+	var n int64
+	q := tx.Model(&models.ClinicRecord{}).
+		Where("room = ? AND appointment_time = ?", roomID, date.Truncate(24*time.Hour))
+	if err := q.Count(&n).Error; err != nil {
+		return false, fmt.Errorf("count records for service date: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (s *ServiceDateService) List(f ListServiceDateFilter) ([]models.ClinicServiceDate, int64, error) {
+	q := s.db.Model(&models.ClinicServiceDate{})
+	if f.RoomID != nil {
+		q = q.Where("room_id = ?", *f.RoomID)
+	}
+	if !f.FromDate.IsZero() {
+		q = q.Where("date >= ?", f.FromDate.Truncate(24*time.Hour))
+	}
+	if f.ActiveOnly {
+		q = q.Where("date >= ?", time.Now().UTC().Truncate(24*time.Hour))
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count service dates: %w", err)
+	}
+
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.PageSize < 1 {
+		f.PageSize = 20
+	}
+	offset := (f.Page - 1) * f.PageSize
+
+	var items []models.ClinicServiceDate
+	if err := q.
+		Order("date ASC, startTime ASC").
+		Offset(offset).
+		Limit(f.PageSize).
+		Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("list service dates: %w", err)
+	}
+
+	if f.HasCapacity {
+		filtered := items[:0]
+		for _, d := range items {
+			var booked int64
+			if err := s.db.Model(&models.ClinicRecord{}).
+				Where("room = ? AND appointment_time = ? AND status NOT IN ?",
+					d.RoomID, d.Date.Truncate(24*time.Hour),
+					[]models.RecordStatus{models.RecordStatusRejected, models.RecordStatusNoShow},
+				).
+				Count(&booked).Error; err != nil {
+				return nil, 0, fmt.Errorf("count booked for service date %d: %w", d.ID, err)
+			}
+			if booked < int64(d.Capacity) {
+				filtered = append(filtered, d)
+			}
+		}
+		items = filtered
+	}
+	return items, total, nil
+}
+
+func (s *ServiceDateService) Update(id uint, in UpdateServiceDateInput) (models.ClinicServiceDate, error) {
+	var d models.ClinicServiceDate
+	if err := s.db.First(&d, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicServiceDate{}, ErrServiceDateNotFound
+		}
+		return models.ClinicServiceDate{}, fmt.Errorf("get service date %d for update: %w", id, err)
+	}
+
+	// Determine the effective room+date after the update for the in-use guard.
+	roomID := *d.RoomID
+	if in.RoomID != nil {
+		roomID = *in.RoomID
+		if err := s.assertRoomExists(roomID); err != nil {
+			return models.ClinicServiceDate{}, err
+		}
+	}
+	date := d.Date
+	if in.Date != nil {
+		date = *in.Date
+	}
+
+	inUse, err := s.recordsExistFor(s.db, roomID, date)
+	if err != nil {
+		return models.ClinicServiceDate{}, err
+	}
+	if inUse {
+		return models.ClinicServiceDate{}, ErrServiceDateInUse
+	}
+
+	updates := map[string]any{}
+	if in.Capacity != nil {
+		updates["capacity"] = *in.Capacity
+	}
+	if in.RoomID != nil {
+		updates["room_id"] = *in.RoomID
+	}
+	if in.Date != nil {
+		updates["date"] = *in.Date
+	}
+	if in.StartTime != nil {
+		updates["startTime"] = *in.StartTime
+	}
+	if in.EndTime != nil {
+		updates["endTime"] = *in.EndTime
+	}
+	if in.Title != nil {
+		updates["title"] = *in.Title
+	}
+
+	if len(updates) > 0 {
+		if err := s.db.Model(&d).Updates(updates).Error; err != nil {
+			return models.ClinicServiceDate{}, fmt.Errorf("update service date %d: %w", id, err)
+		}
+	}
+
+	if err := s.db.First(&d, id).Error; err != nil {
+		return models.ClinicServiceDate{}, fmt.Errorf("reload service date %d: %w", id, err)
+	}
+	return d, nil
+}
+
+func (s *ServiceDateService) Delete(id uint) error {
+	var d models.ClinicServiceDate
+	if err := s.db.First(&d, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrServiceDateNotFound
+		}
+		return fmt.Errorf("get service date %d for delete: %w", id, err)
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		inUse, err := s.recordsExistFor(tx, *d.RoomID, d.Date)
+		if err != nil {
+			return err
+		}
+		if inUse {
+			return ErrServiceDateInUse
+		}
+		if err := tx.Delete(&d).Error; err != nil {
+			return fmt.Errorf("delete service date %d: %w", id, err)
+		}
+		return nil
+	})
+}
