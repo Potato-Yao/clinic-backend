@@ -20,6 +20,7 @@ const (
 // Optional workflow data lives in the related one-to-one side tables.
 type ClinicRecord struct {
 	ID              uint         `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	User            string       `gorm:"size:50;column:user" json:"user"`
 	Realname        string       `gorm:"size:50;not null;column:realname" json:"realname"`
 	PhoneNum        string       `gorm:"size:20;not null;column:phone_num" json:"phone_num"`
 	Status          RecordStatus `gorm:"type:varchar(20);not null;column:status" json:"status"`

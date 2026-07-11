@@ -82,6 +82,17 @@ func (s *RoomService) GetByID(id uint) (models.ClinicRoom, error) {
 	return r, nil
 }
 
+func (s *RoomService) GetByName(name string) (models.ClinicRoom, error) {
+	var r models.ClinicRoom
+	if err := s.db.Where("name = ?", name).First(&r).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicRoom{}, ErrRoomNotFound
+		}
+		return models.ClinicRoom{}, fmt.Errorf("get room by name %q: %w", name, err)
+	}
+	return r, nil
+}
+
 func (s *RoomService) List(f ListRoomFilter) ([]models.ClinicRoom, int64, error) {
 	q := s.db.Model(&models.ClinicRoom{})
 	if f.Name != "" {

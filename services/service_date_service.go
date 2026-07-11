@@ -101,6 +101,20 @@ func (s *ServiceDateService) assertRoomExists(roomID uint) error {
 	return nil
 }
 
+// GetByDateAndRoom returns the service date for the given (roomID, date) or
+// ErrServiceDateNotFound if none exists. Used by the ticket flow to verify the
+// clinic is open on a requested appointment day.
+func (s *ServiceDateService) GetByDateAndRoom(roomID uint, date time.Time) (models.ClinicServiceDate, error) {
+	var d models.ClinicServiceDate
+	if err := s.db.Where("room_id = ? AND date = ?", roomID, date.Truncate(24*time.Hour)).First(&d).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicServiceDate{}, ErrServiceDateNotFound
+		}
+		return models.ClinicServiceDate{}, fmt.Errorf("get service date room=%d date=%s: %w", roomID, date.Format("2006-01-02"), err)
+	}
+	return d, nil
+}
+
 // recordsExistFor returns true if any repair record references the given room+date.
 func (s *ServiceDateService) recordsExistFor(tx *gorm.DB, roomID uint, date time.Time) (bool, error) {
 	var n int64

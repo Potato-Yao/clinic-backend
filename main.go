@@ -32,6 +32,9 @@ func main() {
 	roomSvc := services.NewRoomService(db)
 	roomH := handlers.NewRoomHandler(roomSvc)
 
+	ticketSvc := services.NewTicketService(db)
+	ticketH := handlers.NewTicketHandler(ticketSvc)
+
 	apiKey := os.Getenv("CLINIC_API_KEY")
 	if apiKey == "" {
 		log.Fatal("CLINIC_API_KEY not set")
@@ -39,6 +42,9 @@ func main() {
 	clientAuth := handlers.ClientAuthMiddleware(apiKey, 5*time.Minute)
 
 	r := gin.Default()
+	// The DingTalk proxy sends trailing-slash paths (e.g. /api/wechat/).
+	// Gin's RedirectTrailingSlash would convert POST -> GET via 301, so disable it.
+	r.RedirectTrailingSlash = false
 
 	// Staff routes (CAS auth middleware to be added here).
 	admin := r.Group("/api/admin/announcements")
@@ -88,6 +94,44 @@ func main() {
 	{
 		roomClient.GET("", roomH.List) // clients see enabled rooms only via ?enabled=true
 		roomClient.GET("/:id", roomH.Get)
+	}
+
+	// Ticket routes (API-key signature middleware). Canonical paths.
+	ticket := r.Group("/api/tickets")
+	ticket.Use(clientAuth)
+	{
+		ticket.GET("", ticketH.List)
+		ticket.POST("", ticketH.Create)
+		ticket.GET("/working", ticketH.Working)
+		ticket.GET("/finished", ticketH.Finished)
+		ticket.GET("/:id", ticketH.Get)
+		ticket.PUT("/:id", ticketH.Update)
+		ticket.PATCH("/:id", ticketH.Update)
+		ticket.DELETE("/:id", ticketH.Delete)
+	}
+
+	// Legacy /api/wechat alias — same handlers. The DingTalk proxy sends
+	// trailing-slash paths, so register both forms explicitly (RedirectTrailingSlash
+	// is disabled above and gin doesn't match both "/" and "" automatically).
+	wechat := r.Group("/api/wechat")
+	wechat.Use(clientAuth)
+	{
+		wechat.GET("", ticketH.List)
+		wechat.GET("/", ticketH.List)
+		wechat.POST("", ticketH.Create)
+		wechat.POST("/", ticketH.Create)
+		wechat.GET("/working", ticketH.Working)
+		wechat.GET("/working/", ticketH.Working)
+		wechat.GET("/finished", ticketH.Finished)
+		wechat.GET("/finished/", ticketH.Finished)
+		wechat.GET("/:id", ticketH.Get)
+		wechat.GET("/:id/", ticketH.Get)
+		wechat.PUT("/:id", ticketH.Update)
+		wechat.PUT("/:id/", ticketH.Update)
+		wechat.PATCH("/:id", ticketH.Update)
+		wechat.PATCH("/:id/", ticketH.Update)
+		wechat.DELETE("/:id", ticketH.Delete)
+		wechat.DELETE("/:id/", ticketH.Delete)
 	}
 
 	if err := r.Run(":8080"); err != nil {
