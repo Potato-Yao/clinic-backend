@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"os"
+	"time"
 
 	"clinic-backend/handlers"
 	"clinic-backend/models"
@@ -30,6 +32,12 @@ func main() {
 	roomSvc := services.NewRoomService(db)
 	roomH := handlers.NewRoomHandler(roomSvc)
 
+	apiKey := os.Getenv("CLINIC_API_KEY")
+	if apiKey == "" {
+		log.Fatal("CLINIC_API_KEY not set")
+	}
+	clientAuth := handlers.ClientAuthMiddleware(apiKey, 5*time.Minute)
+
 	r := gin.Default()
 
 	// Staff routes (CAS auth middleware to be added here).
@@ -51,13 +59,15 @@ func main() {
 		serviceDateAdmin.DELETE("/:id", serviceDateH.Delete)
 	}
 
-	// Client routes (API-key signature middleware to be added here).
+	// Client routes (API-key signature middleware).
 	client := r.Group("/api/announcements")
+	client.Use(clientAuth)
 	{
 		client.GET("", announcementH.List) // clients pass ?active=true
 		client.GET("/:id", announcementH.Get)
 	}
 	serviceDateClient := r.Group("/api/service-dates")
+	serviceDateClient.Use(clientAuth)
 	{
 		serviceDateClient.GET("", serviceDateH.List) // clients pass ?active=true&available=true
 		serviceDateClient.GET("/:id", serviceDateH.Get)
@@ -72,8 +82,9 @@ func main() {
 		roomAdmin.DELETE("/:id", roomH.Delete)
 	}
 
-	// Client routes (API-key signature middleware to be added here).
+	// Client routes (API-key signature middleware).
 	roomClient := r.Group("/api/rooms")
+	roomClient.Use(clientAuth)
 	{
 		roomClient.GET("", roomH.List) // clients see enabled rooms only via ?enabled=true
 		roomClient.GET("/:id", roomH.Get)
