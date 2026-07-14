@@ -19,7 +19,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-	if err := db.AutoMigrate(&models.ClinicAnnouncement{}, &models.ClinicServiceDate{}, &models.ClinicRoom{}); err != nil {
+	if err := db.AutoMigrate(
+		&models.ClinicAnnouncement{},
+		&models.ClinicServiceDate{},
+		&models.ClinicRoom{},
+		&models.ClinicStaff{},
+		&models.ClinicStaffWorkyear{},
+		&models.ClinicRecord{},
+		&models.ClinicRecordDevice{},
+		&models.ClinicRecordWorker{},
+		&models.ClinicRecordArrival{},
+		&models.ClinicRecordRejection{},
+		&models.ClinicRecordReferral{},
+	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
 
@@ -35,68 +47,116 @@ func main() {
 	ticketSvc := services.NewTicketService(db)
 	ticketH := handlers.NewTicketHandler(ticketSvc)
 
+	staffSvc := services.NewStaffService(db)
+	staffH := handlers.NewStaffHandler(staffSvc)
+
+	adminRecordSvc := services.NewAdminRecordService(db)
+	adminRecordH := handlers.NewAdminRecordHandler(adminRecordSvc)
+
 	apiKey := os.Getenv("CLINIC_API_KEY")
 	if apiKey == "" {
 		log.Fatal("CLINIC_API_KEY not set")
 	}
 	clientAuth := handlers.ClientAuthMiddleware(apiKey, 5*time.Minute)
 
+	keycloakRealm := os.Getenv("KEYCLOAK_REALM_URL")
+	keycloakClient := os.Getenv("KEYCLOAK_CLIENT_ID")
+	kcAuth := handlers.NewKeycloakAuthMiddleware(keycloakRealm, keycloakClient, staffSvc)
+
 	r := gin.Default()
-	// The DingTalk proxy sends trailing-slash paths (e.g. /api/wechat/).
-	// Gin's RedirectTrailingSlash would convert POST -> GET via 301, so disable it.
 	r.RedirectTrailingSlash = false
 
-	// Staff routes (CAS auth middleware to be added here).
-	admin := r.Group("/api/admin/announcements")
+	// ── Admin: Announcements ──────────────────────────────────────────────
+	// Staff and admin can read; admin only can write.
+	annRead := r.Group("/api/admin/announcements")
+	annRead.Use(kcAuth, handlers.RequireStaff)
 	{
-		admin.POST("", announcementH.Create)
-		admin.GET("", announcementH.List)
-		admin.GET("/:id", announcementH.Get)
-		admin.PUT("/:id", announcementH.Update)
-		admin.DELETE("/:id", announcementH.Delete)
+		annRead.GET("", announcementH.List)
+		annRead.GET("/:id", announcementH.Get)
+	}
+	annWrite := r.Group("/api/admin/announcements")
+	annWrite.Use(kcAuth, handlers.RequireAdmin)
+	{
+		annWrite.POST("", announcementH.Create)
+		annWrite.PUT("/:id", announcementH.Update)
+		annWrite.DELETE("/:id", announcementH.Delete)
 	}
 
-	serviceDateAdmin := r.Group("/api/admin/service-dates")
+	// ── Admin: Service Dates ──────────────────────────────────────────────
+	sdRead := r.Group("/api/admin/service-dates")
+	sdRead.Use(kcAuth, handlers.RequireStaff)
 	{
-		serviceDateAdmin.POST("", serviceDateH.Create)
-		serviceDateAdmin.GET("", serviceDateH.List)
-		serviceDateAdmin.GET("/:id", serviceDateH.Get)
-		serviceDateAdmin.PUT("/:id", serviceDateH.Update)
-		serviceDateAdmin.DELETE("/:id", serviceDateH.Delete)
+		sdRead.GET("", serviceDateH.List)
+		sdRead.GET("/:id", serviceDateH.Get)
+	}
+	sdWrite := r.Group("/api/admin/service-dates")
+	sdWrite.Use(kcAuth, handlers.RequireAdmin)
+	{
+		sdWrite.POST("", serviceDateH.Create)
+		sdWrite.PUT("/:id", serviceDateH.Update)
+		sdWrite.DELETE("/:id", serviceDateH.Delete)
 	}
 
-	// Client routes (API-key signature middleware).
+	// ── Admin: Rooms ──────────────────────────────────────────────────────
+	roomRead := r.Group("/api/admin/rooms")
+	roomRead.Use(kcAuth, handlers.RequireStaff)
+	{
+		roomRead.GET("", roomH.List)
+		roomRead.GET("/:id", roomH.Get)
+	}
+	roomWrite := r.Group("/api/admin/rooms")
+	roomWrite.Use(kcAuth, handlers.RequireAdmin)
+	{
+		roomWrite.POST("", roomH.Create)
+		roomWrite.PUT("/:id", roomH.Update)
+		roomWrite.DELETE("/:id", roomH.Delete)
+	}
+
+	// ── Admin: Records (staff + admin) ────────────────────────────────────
+	records := r.Group("/api/admin/records")
+	records.Use(kcAuth, handlers.RequireStaff)
+	{
+		records.GET("", adminRecordH.List)
+		records.GET("/:id", adminRecordH.Get)
+		records.PUT("/:id", adminRecordH.Update)
+		records.POST("/:id/arrive", adminRecordH.Arrive)
+		records.POST("/:id/in-progress", adminRecordH.InProgress)
+		records.POST("/:id/complete", adminRecordH.Complete)
+		records.POST("/:id/reject", adminRecordH.Reject)
+	}
+
+	// ── Admin: Staff Management (admin only) ──────────────────────────────
+	staffAdm := r.Group("/api/admin/staff")
+	staffAdm.Use(kcAuth, handlers.RequireAdmin)
+	{
+		staffAdm.GET("", staffH.List)
+		staffAdm.GET("/:id", staffH.Get)
+		staffAdm.POST("", staffH.Create)
+		staffAdm.PUT("/:id", staffH.Update)
+		staffAdm.DELETE("/:id", staffH.Delete)
+	}
+
+	// ── Client routes (API-key signature middleware). ─────────────────────
 	client := r.Group("/api/announcements")
 	client.Use(clientAuth)
 	{
-		client.GET("", announcementH.List) // clients pass ?active=true
+		client.GET("", announcementH.List)
 		client.GET("/:id", announcementH.Get)
 	}
 	serviceDateClient := r.Group("/api/service-dates")
 	serviceDateClient.Use(clientAuth)
 	{
-		serviceDateClient.GET("", serviceDateH.List) // clients pass ?active=true&available=true
+		serviceDateClient.GET("", serviceDateH.List)
 		serviceDateClient.GET("/:id", serviceDateH.Get)
 	}
-
-	roomAdmin := r.Group("/api/admin/rooms")
-	{
-		roomAdmin.POST("", roomH.Create)
-		roomAdmin.GET("", roomH.List)
-		roomAdmin.GET("/:id", roomH.Get)
-		roomAdmin.PUT("/:id", roomH.Update)
-		roomAdmin.DELETE("/:id", roomH.Delete)
-	}
-
-	// Client routes (API-key signature middleware).
 	roomClient := r.Group("/api/rooms")
 	roomClient.Use(clientAuth)
 	{
-		roomClient.GET("", roomH.List) // clients see enabled rooms only via ?enabled=true
+		roomClient.GET("", roomH.List)
 		roomClient.GET("/:id", roomH.Get)
 	}
 
-	// Ticket routes (API-key signature middleware). Canonical paths.
+	// ── Ticket routes (client) ────────────────────────────────────────────
 	ticket := r.Group("/api/tickets")
 	ticket.Use(clientAuth)
 	{
@@ -110,9 +170,7 @@ func main() {
 		ticket.DELETE("/:id", ticketH.Delete)
 	}
 
-	// Legacy /api/wechat alias — same handlers. The DingTalk proxy sends
-	// trailing-slash paths, so register both forms explicitly (RedirectTrailingSlash
-	// is disabled above and gin doesn't match both "/" and "" automatically).
+	// Legacy /api/wechat alias.
 	wechat := r.Group("/api/wechat")
 	wechat.Use(clientAuth)
 	{

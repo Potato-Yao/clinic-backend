@@ -1,0 +1,441 @@
+package services
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"clinic-backend/models"
+
+	"gorm.io/gorm"
+)
+
+var (
+	ErrRecordNotFound = errors.New("record not found")
+)
+
+type AdminRecordService struct {
+	db *gorm.DB
+}
+
+func NewAdminRecordService(db *gorm.DB) *AdminRecordService {
+	return &AdminRecordService{db: db}
+}
+
+type ListAdminRecordFilter struct {
+	Status   string
+	RoomID   *uint
+	FromDate *time.Time
+	ToDate   *time.Time
+	Page     int
+	PageSize int
+}
+
+type UpdateAdminRecordInput struct {
+	Status     *models.RecordStatus
+	WorkerDesc *string
+}
+
+type AdminRecordView struct {
+	ID              uint    `json:"id"`
+	User            string  `json:"user"`
+	Realname        string  `json:"realname"`
+	PhoneNum        string  `json:"phone_num"`
+	Status          string  `json:"status"`
+	AppointmentTime string  `json:"appointment_time"`
+	Description     string  `json:"description"`
+	Campus          string  `json:"campus"`
+	WorkerDesc      string  `json:"worker_desc"`
+	RejectReason    string  `json:"reject_reason"`
+	ReferralReason  string  `json:"referral_reason"`
+	Model           string  `json:"model"`
+	Password        string  `json:"password"`
+	ArriveTime      *string `json:"arrive_time,omitempty"`
+	FinishTime      *string `json:"finish_time,omitempty"`
+	WorkerID        *uint   `json:"worker_id,omitempty"`
+}
+
+func (s *AdminRecordService) List(f ListAdminRecordFilter) ([]AdminRecordView, int64, error) {
+	q := s.db.Model(&models.ClinicRecord{})
+
+	if f.Status != "" {
+		q = q.Where("status = ?", f.Status)
+	}
+	if f.RoomID != nil {
+		q = q.Where("room = ?", *f.RoomID)
+	}
+	if f.FromDate != nil {
+		q = q.Where("appointment_time >= ?", f.FromDate.Truncate(24*time.Hour))
+	}
+	if f.ToDate != nil {
+		q = q.Where("appointment_time <= ?", f.ToDate.Truncate(24*time.Hour))
+	}
+
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count records: %w", err)
+	}
+
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.PageSize < 1 {
+		f.PageSize = 20
+	}
+	offset := (f.Page - 1) * f.PageSize
+
+	var records []models.ClinicRecord
+	if err := q.
+		Order("appointment_time DESC, id DESC").
+		Offset(offset).
+		Limit(f.PageSize).
+		Find(&records).Error; err != nil {
+		return nil, 0, fmt.Errorf("list records: %w", err)
+	}
+
+	views := make([]AdminRecordView, 0, len(records))
+	for _, rec := range records {
+		v, err := s.buildView(rec)
+		if err != nil {
+			return nil, 0, err
+		}
+		views = append(views, v)
+	}
+	return views, total, nil
+}
+
+func (s *AdminRecordService) GetByID(id uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+	return s.buildView(rec)
+}
+
+func (s *AdminRecordService) Update(id uint, in UpdateAdminRecordInput) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d for update: %w", id, err)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var err error
+		updates := map[string]any{}
+		if in.Status != nil {
+			updates["status"] = *in.Status
+		}
+		if len(updates) > 0 {
+			if err := tx.Model(&rec).Updates(updates).Error; err != nil {
+				return fmt.Errorf("update record %d: %w", id, err)
+			}
+		}
+
+		if in.WorkerDesc != nil {
+			var worker models.ClinicRecordWorker
+			err = tx.Where("record_id = ?", rec.ID).First(&worker).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				worker = models.ClinicRecordWorker{
+					RecordID:   rec.ID,
+					WorkerDesc: *in.WorkerDesc,
+				}
+				if err := tx.Create(&worker).Error; err != nil {
+					return fmt.Errorf("create record %d worker: %w", id, err)
+				}
+			} else if err == nil {
+				if err := tx.Model(&worker).Update("worker_desc", *in.WorkerDesc).Error; err != nil {
+					return fmt.Errorf("update record %d worker: %w", id, err)
+				}
+			} else {
+				return fmt.Errorf("get record %d worker: %w", id, err)
+			}
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkArrived(id uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusArrived).Error; err != nil {
+			return fmt.Errorf("mark arrived record %d: %w", id, err)
+		}
+
+		var arrival models.ClinicRecordArrival
+		err := tx.Where("record_id = ?", rec.ID).First(&arrival).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			arrival = models.ClinicRecordArrival{
+				RecordID:   rec.ID,
+				ArriveTime: time.Now().UTC(),
+			}
+			if err := tx.Create(&arrival).Error; err != nil {
+				return fmt.Errorf("create record %d arrival: %w", id, err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("get record %d arrival: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkInProgress(id uint, workerID uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusInProgress).Error; err != nil {
+			return fmt.Errorf("mark in_progress record %d: %w", id, err)
+		}
+
+		var worker models.ClinicRecordWorker
+		err := tx.Where("record_id = ?", rec.ID).First(&worker).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			worker = models.ClinicRecordWorker{
+				RecordID: rec.ID,
+				WorkerID: workerID,
+			}
+			if err := tx.Create(&worker).Error; err != nil {
+				return fmt.Errorf("create record %d worker: %w", id, err)
+			}
+		} else if err == nil {
+			if err := tx.Model(&worker).Update("worker", workerID).Error; err != nil {
+				return fmt.Errorf("update record %d worker: %w", id, err)
+			}
+		} else {
+			return fmt.Errorf("get record %d worker: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkCompleted(id uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusCompleted).Error; err != nil {
+			return fmt.Errorf("mark completed record %d: %w", id, err)
+		}
+
+		var worker models.ClinicRecordWorker
+		err := tx.Where("record_id = ?", rec.ID).First(&worker).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			worker = models.ClinicRecordWorker{
+				RecordID:   rec.ID,
+				FinishTime: time.Now().UTC(),
+			}
+			if err := tx.Create(&worker).Error; err != nil {
+				return fmt.Errorf("create record %d worker: %w", id, err)
+			}
+		} else if err == nil {
+			if err := tx.Model(&worker).Update("finish_time", time.Now().UTC()).Error; err != nil {
+				return fmt.Errorf("update record %d worker finish_time: %w", id, err)
+			}
+		} else {
+			return fmt.Errorf("get record %d worker: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkRejected(id uint, reason string) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusRejected).Error; err != nil {
+			return fmt.Errorf("mark rejected record %d: %w", id, err)
+		}
+
+		var rejection models.ClinicRecordRejection
+		err := tx.Where("record_id = ?", rec.ID).First(&rejection).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			rejection = models.ClinicRecordRejection{
+				RecordID:     rec.ID,
+				RejectReason: reason,
+			}
+			if err := tx.Create(&rejection).Error; err != nil {
+				return fmt.Errorf("create record %d rejection: %w", id, err)
+			}
+		} else if err == nil {
+			if err := tx.Model(&rejection).Update("reject_reason", reason).Error; err != nil {
+				return fmt.Errorf("update record %d rejection: %w", id, err)
+			}
+		} else {
+			return fmt.Errorf("get record %d rejection: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) buildView(rec models.ClinicRecord) (AdminRecordView, error) {
+	return s.buildViewTx(s.db, rec)
+}
+
+func (s *AdminRecordService) buildViewTx(tx *gorm.DB, rec models.ClinicRecord) (AdminRecordView, error) {
+	var room models.ClinicRoom
+	if err := tx.Select("name").Where("id = ?", rec.RoomID).First(&room).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, fmt.Errorf("load room for record %d: %w", rec.ID, err)
+		}
+	}
+
+	var device models.ClinicRecordDevice
+	hasDevice := true
+	if err := tx.Where("record_id = ?", rec.ID).First(&device).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			hasDevice = false
+		} else {
+			return AdminRecordView{}, fmt.Errorf("load device for record %d: %w", rec.ID, err)
+		}
+	}
+
+	var worker models.ClinicRecordWorker
+	hasWorker := true
+	if err := tx.Where("record_id = ?", rec.ID).First(&worker).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			hasWorker = false
+		} else {
+			return AdminRecordView{}, fmt.Errorf("load worker for record %d: %w", rec.ID, err)
+		}
+	}
+
+	var rejection models.ClinicRecordRejection
+	hasRejection := true
+	if err := tx.Where("record_id = ?", rec.ID).First(&rejection).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			hasRejection = false
+		} else {
+			return AdminRecordView{}, fmt.Errorf("load rejection for record %d: %w", rec.ID, err)
+		}
+	}
+
+	var referral models.ClinicRecordReferral
+	hasReferral := true
+	if err := tx.Where("record_id = ?", rec.ID).First(&referral).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			hasReferral = false
+		} else {
+			return AdminRecordView{}, fmt.Errorf("load referral for record %d: %w", rec.ID, err)
+		}
+	}
+
+	var arrival models.ClinicRecordArrival
+	hasArrival := true
+	if err := tx.Where("record_id = ?", rec.ID).First(&arrival).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			hasArrival = false
+		} else {
+			return AdminRecordView{}, fmt.Errorf("load arrival for record %d: %w", rec.ID, err)
+		}
+	}
+
+	v := AdminRecordView{
+		ID:              rec.ID,
+		User:            rec.User,
+		Realname:        rec.Realname,
+		PhoneNum:        rec.PhoneNum,
+		Status:          string(rec.Status),
+		AppointmentTime: rec.AppointmentTime.UTC().Format("2006-01-02"),
+		Description:     rec.QuestionDesc,
+		Campus:          room.Name,
+	}
+	if hasDevice {
+		v.Model = device.LaptopModel
+		v.Password = device.Password
+	}
+	if hasWorker {
+		v.WorkerDesc = worker.WorkerDesc
+		v.WorkerID = &worker.WorkerID
+		if !worker.FinishTime.IsZero() {
+			v.FinishTime = new(worker.FinishTime.UTC().Format(time.RFC3339))
+		}
+	}
+	if hasRejection {
+		v.RejectReason = rejection.RejectReason
+	}
+	if hasReferral {
+		v.ReferralReason = referral.ReferralReason
+	}
+	if hasArrival {
+		v.ArriveTime = new(arrival.ArriveTime.UTC().Format(time.RFC3339))
+	}
+	return v, nil
+}
