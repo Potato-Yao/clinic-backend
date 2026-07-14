@@ -34,6 +34,13 @@ func main() {
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_tos
+		ON clinic_announcement(tag)
+		WHERE tag = 'tos'
+	`).Error; err != nil {
+		log.Fatalf("failed to create tos unique index: %v", err)
+	}
 
 	announcementSvc := services.NewAnnouncementService(db)
 	announcementH := handlers.NewAnnouncementHandler(announcementSvc)

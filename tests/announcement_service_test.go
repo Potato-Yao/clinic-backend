@@ -35,7 +35,7 @@ func TestAnnouncementService_Create(t *testing.T) {
 	a, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "System Maintenance",
 		Content:    "The clinic will be closed.",
-		Tag:        "notice",
+		Tag:        "normal",
 		Brief:      "Clinic closed",
 		ExpireDate: futureDate(7),
 		Priority:   2,
@@ -70,9 +70,9 @@ func TestAnnouncementService_List_FilterAndSort(t *testing.T) {
 
 	// Two active, one expired; varying priority and tag.
 	seed := []services.CreateAnnouncementInput{
-		{Title: "A", Content: "c", Tag: "notice", Brief: "b", ExpireDate: futureDate(5), Priority: 1},
-		{Title: "B", Content: "c", Tag: "notice", Brief: "b", ExpireDate: futureDate(10), Priority: 3},
-		{Title: "C", Content: "c", Tag: "alert", Brief: "b", ExpireDate: futureDate(-1), Priority: 5},
+		{Title: "A", Content: "c", Tag: "normal", Brief: "b", ExpireDate: futureDate(5), Priority: 1},
+		{Title: "B", Content: "c", Tag: "normal", Brief: "b", ExpireDate: futureDate(10), Priority: 3},
+		{Title: "C", Content: "c", Tag: "pinned", Brief: "b", ExpireDate: futureDate(-1), Priority: 5},
 	}
 	for _, in := range seed {
 		if _, err := svc.Create(in); err != nil {
@@ -110,7 +110,7 @@ func TestAnnouncementService_List_FilterAndSort(t *testing.T) {
 	})
 
 	t.Run("tag_filter", func(t *testing.T) {
-		items, total, err := svc.List(services.ListAnnouncementFilter{Tag: "alert"})
+		items, total, err := svc.List(services.ListAnnouncementFilter{Tag: "pinned"})
 		if err != nil {
 			t.Fatalf("list failed: %v", err)
 		}
@@ -128,7 +128,7 @@ func TestAnnouncementService_List_Pagination(t *testing.T) {
 		if _, err := svc.Create(services.CreateAnnouncementInput{
 			Title:      "T",
 			Content:    "c",
-			Tag:        "n",
+			Tag:        "normal",
 			Brief:      "b",
 			ExpireDate: futureDate(1),
 			Priority:   uint(i),
@@ -156,7 +156,7 @@ func TestAnnouncementService_Update_PartialAndTimestamp(t *testing.T) {
 	a, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "Old",
 		Content:    "old content",
-		Tag:        "n",
+		Tag:        "normal",
 		Brief:      "old brief",
 		ExpireDate: futureDate(3),
 		Priority:   1,
@@ -201,7 +201,7 @@ func TestAnnouncementService_Delete(t *testing.T) {
 	a, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "X",
 		Content:    "c",
-		Tag:        "n",
+		Tag:        "normal",
 		Brief:      "b",
 		ExpireDate: futureDate(1),
 	})
@@ -222,5 +222,108 @@ func TestAnnouncementService_Delete_NotFound(t *testing.T) {
 
 	if err := svc.Delete(999); !errors.Is(err, services.ErrAnnouncementNotFound) {
 		t.Fatalf("expected ErrAnnouncementNotFound, got %v", err)
+	}
+}
+
+func TestAnnouncementService_Create_DefaultTag(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	a, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "Default Tag",
+		Content:    "test",
+		Brief:      "test",
+		ExpireDate: futureDate(1),
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if a.Tag != models.AnnouncementTagNormal {
+		t.Errorf("expected default tag %q, got %q", models.AnnouncementTagNormal, a.Tag)
+	}
+}
+
+func TestAnnouncementService_Create_InvalidTag(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	_, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "Bad Tag",
+		Content:    "test",
+		Tag:        "invalid",
+		Brief:      "test",
+		ExpireDate: futureDate(1),
+	})
+	if !errors.Is(err, services.ErrAnnouncementInvalidTag) {
+		t.Fatalf("expected ErrAnnouncementInvalidTag, got %v", err)
+	}
+}
+
+func TestAnnouncementService_Create_DuplicateTOS(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	_, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "TOS One",
+		Content:    "terms",
+		Tag:        "tos",
+		Brief:      "tos",
+		ExpireDate: futureDate(1),
+	})
+	if err != nil {
+		t.Fatalf("first tos create failed: %v", err)
+	}
+
+	_, err = svc.Create(services.CreateAnnouncementInput{
+		Title:      "TOS Two",
+		Content:    "terms",
+		Tag:        "tos",
+		Brief:      "tos",
+		ExpireDate: futureDate(1),
+	})
+	if !errors.Is(err, services.ErrAnnouncementTOSAlreadyExists) {
+		t.Fatalf("expected ErrAnnouncementTOSAlreadyExists, got %v", err)
+	}
+}
+
+func TestAnnouncementService_Update_DuplicateTOS(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	a1, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "TOS One",
+		Content:    "terms",
+		Tag:        "tos",
+		Brief:      "tos",
+		ExpireDate: futureDate(1),
+	})
+	if err != nil {
+		t.Fatalf("first tos create failed: %v", err)
+	}
+
+	a2, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "Normal",
+		Content:    "test",
+		Tag:        "normal",
+		Brief:      "test",
+		ExpireDate: futureDate(1),
+	})
+	if err != nil {
+		t.Fatalf("normal create failed: %v", err)
+	}
+
+	tos := models.AnnouncementTagTOS
+	_, err = svc.Update(a2.ID, services.UpdateAnnouncementInput{Tag: &tos})
+	if !errors.Is(err, services.ErrAnnouncementTOSAlreadyExists) {
+		t.Fatalf("expected ErrAnnouncementTOSAlreadyExists, got %v", err)
+	}
+
+	// Updating the existing TOS to itself should succeed.
+	updated, err := svc.Update(a1.ID, services.UpdateAnnouncementInput{Tag: &tos})
+	if err != nil {
+		t.Fatalf("re-setting tos on same announcement should succeed: %v", err)
+	}
+	if updated.Tag != models.AnnouncementTagTOS {
+		t.Errorf("expected tag to remain tos, got %q", updated.Tag)
 	}
 }

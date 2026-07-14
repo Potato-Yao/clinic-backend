@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"clinic-backend/models"
 	"clinic-backend/services"
 
 	"github.com/gin-gonic/gin"
@@ -51,13 +52,13 @@ func (h *AnnouncementHandler) Create(c *gin.Context) {
 	a, err := h.svc.Create(services.CreateAnnouncementInput{
 		Title:      req.Title,
 		Content:    req.Content,
-		Tag:        req.Tag,
+		Tag:        models.AnnouncementTag(req.Tag),
 		Brief:      req.Brief,
 		ExpireDate: req.ExpireDate,
 		Priority:   req.Priority,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeServiceError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, a)
@@ -78,27 +79,17 @@ func (h *AnnouncementHandler) Get(c *gin.Context) {
 
 func (h *AnnouncementHandler) List(c *gin.Context) {
 	f := services.ListAnnouncementFilter{
-		Tag:        c.Query("tag"),
+		Tag:        models.AnnouncementTag(c.Query("tag")),
 		ActiveOnly: c.Query("active") == "true",
 	}
-	if v, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil {
-		f.Page = v
-	}
-	if v, err := strconv.Atoi(c.DefaultQuery("pageSize", "20")); err == nil {
-		f.PageSize = v
-	}
+	f.Page, f.PageSize = parsePagination(c)
 
 	items, total, err := h.svc.List(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"items":    items,
-		"total":    total,
-		"page":     f.Page,
-		"pageSize": f.PageSize,
-	})
+	paginatedResponse(c, items, total, f.Page, f.PageSize)
 }
 
 func (h *AnnouncementHandler) Update(c *gin.Context) {
@@ -118,10 +109,16 @@ func (h *AnnouncementHandler) Update(c *gin.Context) {
 		}
 	}
 
+	var tag *models.AnnouncementTag
+	if req.Tag != nil {
+		t := models.AnnouncementTag(*req.Tag)
+		tag = &t
+	}
+
 	a, err := h.svc.Update(id, services.UpdateAnnouncementInput{
 		Title:      req.Title,
 		Content:    req.Content,
-		Tag:        req.Tag,
+		Tag:        tag,
 		Brief:      req.Brief,
 		ExpireDate: req.ExpireDate,
 		Priority:   req.Priority,
@@ -145,13 +142,14 @@ func (h *AnnouncementHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
-// writeServiceError maps service errors to HTTP statuses.
+var announcementErrorMappings = []errStatus{
+	{services.ErrAnnouncementNotFound, http.StatusNotFound},
+	{services.ErrAnnouncementInvalidTag, http.StatusBadRequest},
+	{services.ErrAnnouncementTOSAlreadyExists, http.StatusConflict},
+}
+
 func writeServiceError(c *gin.Context, err error) {
-	if errors.Is(err, services.ErrAnnouncementNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	writeMappedError(c, err, announcementErrorMappings)
 }
 
 func parseID(c *gin.Context) (uint, bool) {

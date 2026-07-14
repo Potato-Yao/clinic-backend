@@ -32,7 +32,7 @@ func TestClinicAnnouncement_CreateAndRetrieve(t *testing.T) {
 	announcement := models.ClinicAnnouncement{
 		Title:          "System Maintenance",
 		Content:        "The clinic will be closed for maintenance.",
-		Tag:            "notice",
+		Tag:            "normal",
 		CreatedTime:    now,
 		LastEditedTime: now,
 		ExpireDate:     expire,

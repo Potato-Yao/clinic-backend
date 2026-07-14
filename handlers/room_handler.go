@@ -1,9 +1,7 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
-	"strconv"
 
 	"clinic-backend/services"
 
@@ -67,24 +65,14 @@ func (h *RoomHandler) List(c *gin.Context) {
 		Name:        c.Query("name"),
 		EnabledOnly: c.Query("enabled") == "true",
 	}
-	if v, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil {
-		f.Page = v
-	}
-	if v, err := strconv.Atoi(c.DefaultQuery("pageSize", "20")); err == nil {
-		f.PageSize = v
-	}
+	f.Page, f.PageSize = parsePagination(c)
 
 	items, total, err := h.svc.List(f)
 	if err != nil {
 		writeRoomError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"items":    items,
-		"total":    total,
-		"page":     f.Page,
-		"pageSize": f.PageSize,
-	})
+	paginatedResponse(c, items, total, f.Page, f.PageSize)
 }
 
 func (h *RoomHandler) Update(c *gin.Context) {
@@ -123,15 +111,12 @@ func (h *RoomHandler) Delete(c *gin.Context) {
 }
 
 // writeRoomError maps service errors to HTTP statuses.
+var roomErrorMappings = []errStatus{
+	{services.ErrRoomNotFound, http.StatusNotFound},
+	{services.ErrRoomNameTaken, http.StatusConflict},
+	{services.ErrRoomInUse, http.StatusConflict},
+}
+
 func writeRoomError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, services.ErrRoomNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, services.ErrRoomNameTaken):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	case errors.Is(err, services.ErrRoomInUse):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-	}
+	writeMappedError(c, err, roomErrorMappings)
 }

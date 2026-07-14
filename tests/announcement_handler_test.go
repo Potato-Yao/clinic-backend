@@ -62,7 +62,7 @@ func TestAnnouncementHandler_Create_Success(t *testing.T) {
 	w := doRequest(t, r, http.MethodPost, "/api/admin/announcements", map[string]any{
 		"title":      "Hello",
 		"content":    "body text",
-		"tag":        "notice",
+		"tag":        "normal",
 		"brief":      "short",
 		"expireDate": futureDate(7).Format(time.RFC3339),
 		"priority":   1,
@@ -113,7 +113,7 @@ func TestAnnouncementHandler_List(t *testing.T) {
 	r, svc := setupAnnouncementHandlerRouter(t)
 	for i := 0; i < 3; i++ {
 		if _, err := svc.Create(services.CreateAnnouncementInput{
-			Title: "T", Content: "c", Tag: "n", Brief: "b", ExpireDate: futureDate(1), Priority: uint(i),
+			Title: "T", Content: "c", Tag: "normal", Brief: "b", ExpireDate: futureDate(1), Priority: uint(i),
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
 		}
@@ -140,7 +140,7 @@ func TestAnnouncementHandler_List(t *testing.T) {
 func TestAnnouncementHandler_Update_Partial(t *testing.T) {
 	r, svc := setupAnnouncementHandlerRouter(t)
 	a, err := svc.Create(services.CreateAnnouncementInput{
-		Title: "Old", Content: "c", Tag: "n", Brief: "b", ExpireDate: futureDate(2),
+		Title: "Old", Content: "c", Tag: "normal", Brief: "b", ExpireDate: futureDate(2),
 	})
 	if err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -162,7 +162,7 @@ func TestAnnouncementHandler_Update_Partial(t *testing.T) {
 func TestAnnouncementHandler_Delete_Success(t *testing.T) {
 	r, svc := setupAnnouncementHandlerRouter(t)
 	a, err := svc.Create(services.CreateAnnouncementInput{
-		Title: "X", Content: "c", Tag: "n", Brief: "b", ExpireDate: futureDate(1),
+		Title: "X", Content: "c", Tag: "normal", Brief: "b", ExpireDate: futureDate(1),
 	})
 	if err != nil {
 		t.Fatalf("seed failed: %v", err)

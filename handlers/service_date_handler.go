@@ -87,24 +87,14 @@ func (h *ServiceDateHandler) List(c *gin.Context) {
 	if v, err := time.Parse(time.RFC3339, c.Query("from")); err == nil {
 		f.FromDate = v
 	}
-	if v, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil {
-		f.Page = v
-	}
-	if v, err := strconv.Atoi(c.DefaultQuery("pageSize", "20")); err == nil {
-		f.PageSize = v
-	}
+	f.Page, f.PageSize = parsePagination(c)
 
 	items, total, err := h.svc.List(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"items":    items,
-		"total":    total,
-		"page":     f.Page,
-		"pageSize": f.PageSize,
-	})
+	paginatedResponse(c, items, total, f.Page, f.PageSize)
 }
 
 func (h *ServiceDateHandler) Update(c *gin.Context) {
@@ -156,18 +146,15 @@ func (h *ServiceDateHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
+var serviceDateErrorMappings = []errStatus{
+	{services.ErrServiceDateNotFound, http.StatusNotFound},
+	{services.ErrServiceDateRoomNotFound, http.StatusBadRequest},
+	{services.ErrServiceDateInUse, http.StatusConflict},
+}
+
 // writeServiceDateError maps service errors to HTTP statuses.
 func writeServiceDateError(c *gin.Context, err error) {
-	switch {
-	case errors.Is(err, services.ErrServiceDateNotFound):
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, services.ErrServiceDateRoomNotFound):
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case errors.Is(err, services.ErrServiceDateInUse):
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-	}
+	writeMappedError(c, err, serviceDateErrorMappings)
 }
 
 // validateServiceDateWindow rejects past dates and inverted or same-day-spanning windows.

@@ -10,8 +10,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// ErrAnnouncementNotFound is returned when no announcement matches the given id.
-var ErrAnnouncementNotFound = errors.New("announcement not found")
+var (
+	ErrAnnouncementNotFound         = errors.New("announcement not found")
+	ErrAnnouncementInvalidTag       = errors.New("invalid announcement tag")
+	ErrAnnouncementTOSAlreadyExists = errors.New("a terms-of-service announcement already exists")
+)
 
 // AnnouncementService contains the business logic for announcement CRUD.
 type AnnouncementService struct {
@@ -27,7 +30,7 @@ func NewAnnouncementService(db *gorm.DB) *AnnouncementService {
 type CreateAnnouncementInput struct {
 	Title      string
 	Content    string
-	Tag        string
+	Tag        models.AnnouncementTag
 	Brief      string
 	ExpireDate time.Time
 	Priority   uint
@@ -37,7 +40,7 @@ type CreateAnnouncementInput struct {
 type UpdateAnnouncementInput struct {
 	Title      *string
 	Content    *string
-	Tag        *string
+	Tag        *models.AnnouncementTag
 	Brief      *string
 	ExpireDate *time.Time
 	Priority   *uint
@@ -45,13 +48,29 @@ type UpdateAnnouncementInput struct {
 
 // ListAnnouncementFilter controls listing behavior.
 type ListAnnouncementFilter struct {
-	Tag        string
+	Tag        models.AnnouncementTag
 	ActiveOnly bool
 	Page       int
 	PageSize   int
 }
 
 func (s *AnnouncementService) Create(in CreateAnnouncementInput) (models.ClinicAnnouncement, error) {
+	if in.Tag == "" {
+		in.Tag = models.AnnouncementTagNormal
+	}
+	if !in.Tag.Valid() {
+		return models.ClinicAnnouncement{}, ErrAnnouncementInvalidTag
+	}
+	if in.Tag == models.AnnouncementTagTOS {
+		var count int64
+		if err := s.db.Model(&models.ClinicAnnouncement{}).Where("tag = ?", models.AnnouncementTagTOS).Count(&count).Error; err != nil {
+			return models.ClinicAnnouncement{}, fmt.Errorf("check existing tos: %w", err)
+		}
+		if count > 0 {
+			return models.ClinicAnnouncement{}, ErrAnnouncementTOSAlreadyExists
+		}
+	}
+
 	now := time.Now().UTC()
 	a := models.ClinicAnnouncement{
 		Title:          in.Title,
@@ -122,6 +141,23 @@ func (s *AnnouncementService) Update(id uint, in UpdateAnnouncementInput) (model
 		return models.ClinicAnnouncement{}, fmt.Errorf("get announcement %d for update: %w", id, err)
 	}
 
+	if in.Tag != nil {
+		if !in.Tag.Valid() {
+			return models.ClinicAnnouncement{}, ErrAnnouncementInvalidTag
+		}
+		if *in.Tag == models.AnnouncementTagTOS && a.Tag != models.AnnouncementTagTOS {
+			var count int64
+			if err := s.db.Model(&models.ClinicAnnouncement{}).
+				Where("tag = ? AND id != ?", models.AnnouncementTagTOS, id).
+				Count(&count).Error; err != nil {
+				return models.ClinicAnnouncement{}, fmt.Errorf("check existing tos: %w", err)
+			}
+			if count > 0 {
+				return models.ClinicAnnouncement{}, ErrAnnouncementTOSAlreadyExists
+			}
+		}
+	}
+
 	updates := map[string]any{}
 	if in.Title != nil {
 		updates["title"] = *in.Title
@@ -143,13 +179,12 @@ func (s *AnnouncementService) Update(id uint, in UpdateAnnouncementInput) (model
 	}
 	updates["lastEditedTime"] = time.Now().UTC()
 
-	if len(updates) > 1 { // lastEditedTime is always present
+	if len(updates) > 1 {
 		if err := s.db.Model(&a).Updates(updates).Error; err != nil {
 			return models.ClinicAnnouncement{}, fmt.Errorf("update announcement %d: %w", id, err)
 		}
 	}
 
-	// Reload to return the updated row.
 	if err := s.db.First(&a, id).Error; err != nil {
 		return models.ClinicAnnouncement{}, fmt.Errorf("reload announcement %d: %w", id, err)
 	}
