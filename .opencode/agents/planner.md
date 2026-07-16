@@ -3,7 +3,7 @@ description: Plans user requirements into constraints, questions, and ordered im
 mode: subagent
 # model: xiaomi-token-plan-cn/mimo-v2.5-pro
 # model: deepseek/deepseek-v4-pro
-model: codexcn/gpt-5.5
+model: opencode-go/kimi-2.7
 permission:
   read: allow
   glob: allow

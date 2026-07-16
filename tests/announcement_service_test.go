@@ -259,6 +259,43 @@ func TestAnnouncementService_Create_InvalidTag(t *testing.T) {
 	}
 }
 
+func TestAnnouncementService_GetTOS_Found(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	_, err := svc.Create(services.CreateAnnouncementInput{
+		Title:      "Terms of Service",
+		Content:    "You agree to...",
+		Tag:        "tos",
+		Brief:      "TOS brief",
+		ExpireDate: futureDate(30),
+	})
+	if err != nil {
+		t.Fatalf("seed tos failed: %v", err)
+	}
+
+	a, err := svc.GetTOS()
+	if err != nil {
+		t.Fatalf("GetTOS failed: %v", err)
+	}
+	if a.Tag != models.AnnouncementTagTOS {
+		t.Errorf("expected tag tos, got %q", a.Tag)
+	}
+	if a.Title != "Terms of Service" {
+		t.Errorf("expected title %q, got %q", "Terms of Service", a.Title)
+	}
+}
+
+func TestAnnouncementService_GetTOS_NotFound(t *testing.T) {
+	db := setupAnnouncementServiceDB(t)
+	svc := services.NewAnnouncementService(db)
+
+	_, err := svc.GetTOS()
+	if !errors.Is(err, services.ErrAnnouncementNotFound) {
+		t.Fatalf("expected ErrAnnouncementNotFound, got %v", err)
+	}
+}
+
 func TestAnnouncementService_Create_DuplicateTOS(t *testing.T) {
 	db := setupAnnouncementServiceDB(t)
 	svc := services.NewAnnouncementService(db)

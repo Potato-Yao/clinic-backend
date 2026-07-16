@@ -177,6 +177,10 @@ func main() {
 		ticket.DELETE("/:id", ticketH.Delete)
 	}
 
+	// ── Public: Terms of Service ───────────────────────────────────────────
+	r.GET("/api/announcement/toc", announcementH.TOS)
+	r.GET("/api/announcement/toc/", announcementH.TOS)
+
 	// Legacy /api/wechat alias.
 	wechat := r.Group("/api/wechat")
 	wechat.Use(clientAuth)

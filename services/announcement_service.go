@@ -99,13 +99,24 @@ func (s *AnnouncementService) GetByID(id uint) (models.ClinicAnnouncement, error
 	return a, nil
 }
 
+func (s *AnnouncementService) GetTOS() (models.ClinicAnnouncement, error) {
+	var a models.ClinicAnnouncement
+	if err := s.db.Where("tag = ?", models.AnnouncementTagTOS).First(&a).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicAnnouncement{}, ErrAnnouncementNotFound
+		}
+		return models.ClinicAnnouncement{}, fmt.Errorf("get tos: %w", err)
+	}
+	return a, nil
+}
+
 func (s *AnnouncementService) List(f ListAnnouncementFilter) ([]models.ClinicAnnouncement, int64, error) {
 	q := s.db.Model(&models.ClinicAnnouncement{})
 	if f.Tag != "" {
 		q = q.Where("tag = ?", f.Tag)
 	}
 	if f.ActiveOnly {
-		q = q.Where("expireDate >= ?", time.Now().UTC().Truncate(24*time.Hour))
+		q = q.Where("(expireDate >= ? OR tag = ?)", time.Now().UTC().Truncate(24*time.Hour), models.AnnouncementTagTOS)
 	}
 
 	var total int64

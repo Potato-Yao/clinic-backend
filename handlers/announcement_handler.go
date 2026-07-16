@@ -142,6 +142,15 @@ func (h *AnnouncementHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
+func (h *AnnouncementHandler) TOS(c *gin.Context) {
+	a, err := h.svc.GetTOS()
+	if err != nil {
+		writeServiceError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, a)
+}
+
 var announcementErrorMappings = []errStatus{
 	{services.ErrAnnouncementNotFound, http.StatusNotFound},
 	{services.ErrAnnouncementInvalidTag, http.StatusBadRequest},
