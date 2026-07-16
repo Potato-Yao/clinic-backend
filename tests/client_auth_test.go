@@ -14,7 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const testAPIKey = "test-shared-secret"
+const testAPIKey = "fake-shared-secret"
 
 func setupAuthRouter(t *testing.T) *gin.Engine {
 	t.Helper()

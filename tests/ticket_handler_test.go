@@ -17,7 +17,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const ticketAPIKey = "ticket-test-secret"
+const ticketAPIKey = "ticket-fake-secret"
 
 func setupTicketHandlerRouter(t *testing.T) (*gin.Engine, *gorm.DB, *services.TicketService) {
 	t.Helper()

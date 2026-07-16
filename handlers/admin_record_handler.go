@@ -126,7 +126,11 @@ func (h *AdminRecordHandler) InProgress(c *gin.Context) {
 	if !ok {
 		return
 	}
-	staff := contextStaff(c)
+	staff, ok := contextStaff(c)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing staff context"})
+		return
+	}
 	v, err := h.svc.MarkInProgress(id, uint(staff.ID))
 	if err != nil {
 		writeRecordError(c, err)

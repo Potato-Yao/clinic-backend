@@ -56,7 +56,7 @@ Where each task is an object:
   "description": "Detailed description of what needs to be done. Be specific about the change, not the goal.",
   "approach": "How to implement this. Name the exact functions/classes to create or modify. Describe the code structure. Reference existing code patterns to follow (e.g. 'follow the pattern in SomeExistingFile.kt:42'). Include method signatures, parameter names, and return types when that eliminates ambiguity.",
   "dependencies": ["Title of task that must be completed first"],
-  "verification": "How to verify this task is correct. Name specific test commands, expected behavior, or manual checks."
+  "verification": "How to verify this task is correct. Name specific fake commands, expected behavior, or manual checks."
 }
 ```
 

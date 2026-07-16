@@ -13,7 +13,7 @@ import (
 func setupAnnouncementTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Fatalf("failed to open fake database: %v", err)
 	}
 
 	if err := db.AutoMigrate(&models.ClinicAnnouncement{}); err != nil {

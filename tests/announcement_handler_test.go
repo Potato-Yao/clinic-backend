@@ -22,7 +22,7 @@ func setupAnnouncementHandlerRouter(t *testing.T) (*gin.Engine, *services.Announ
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Fatalf("failed to open fake database: %v", err)
 	}
 	if err := db.AutoMigrate(&models.ClinicAnnouncement{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
@@ -186,7 +186,7 @@ func setupTOSHandlerRouter(t *testing.T) (*gin.Engine, *services.AnnouncementSer
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Fatalf("failed to open fake database: %v", err)
 	}
 	if err := db.AutoMigrate(&models.ClinicAnnouncement{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)

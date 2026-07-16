@@ -2,7 +2,10 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"clinic-backend/handlers"
@@ -31,6 +34,7 @@ func main() {
 		&models.ClinicRecordArrival{},
 		&models.ClinicRecordRejection{},
 		&models.ClinicRecordReferral{},
+		&models.AuthSession{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
@@ -57,6 +61,9 @@ func main() {
 	staffSvc := services.NewStaffService(db)
 	staffH := handlers.NewStaffHandler(staffSvc)
 
+	sessionTTL := envDuration("SESSION_TTL", 336*time.Hour)
+	sessionSvc := services.NewSessionService(db, sessionTTL)
+
 	adminRecordSvc := services.NewAdminRecordService(db)
 	adminRecordH := handlers.NewAdminRecordHandler(adminRecordSvc)
 
@@ -68,21 +75,58 @@ func main() {
 
 	keycloakRealm := os.Getenv("KEYCLOAK_REALM_URL")
 	keycloakClient := os.Getenv("KEYCLOAK_CLIENT_ID")
-	kcAuth := handlers.NewKeycloakAuthMiddleware(keycloakRealm, keycloakClient, staffSvc)
+	keycloakAuth := handlers.NewKeycloakAuthenticator(keycloakRealm, keycloakClient, staffSvc)
+
+	casServerURL := os.Getenv("CAS_SERVER_URL")
+	casTimeout := envDuration("CAS_HTTP_TIMEOUT", 10*time.Second)
+	casLogoutParam := os.Getenv("CAS_LOGOUT_RETURN_PARAM")
+	var casClient handlers.CASClient
+	if casServerURL != "" {
+		casClient = handlers.NewCASClient(casServerURL, casLogoutParam, casTimeout)
+	}
+
+	appBaseURL := strings.TrimRight(envString("APP_BASE_URL", ""), "/")
+	if casServerURL != "" && appBaseURL == "" {
+		log.Fatal("CAS_SERVER_URL is set but APP_BASE_URL is empty")
+	}
+
+	casHandler := handlers.NewCASAuthHandler(handlers.CASAuthConfig{
+		Client:         casClient,
+		SessionService: sessionSvc,
+		StaffService:   staffSvc,
+		BaseURL:        appBaseURL,
+		DefaultNext:    envString("CAS_DEFAULT_REDIRECT", "/manage/"),
+		CookieName:     envString("SESSION_COOKIE_NAME", "sessionid"),
+		CSRFCookieName: envString("CSRF_COOKIE_NAME", "csrf_token"),
+		CookieSecure:   envBool("SESSION_COOKIE_SECURE", false),
+		CookieSameSite: envSameSite("SESSION_COOKIE_SAMESITE", http.SameSiteLaxMode),
+		SessionTTL:     sessionTTL,
+	})
+
+	adminAuth := handlers.NewAdminAuthMiddleware(handlers.AdminAuthConfig{
+		SessionService: sessionSvc,
+		StaffService:   staffSvc,
+		KeycloakAuth:   keycloakAuth,
+		CookieName:     envString("SESSION_COOKIE_NAME", "sessionid"),
+	})
 
 	r := gin.Default()
 	r.RedirectTrailingSlash = false
 
+	// ── CAS login/logout ─────────────────────────────────────────────────
+	r.GET("/login", casHandler.Login)
+	r.GET("/logout", casHandler.Logout)
+
 	// ── Admin: Announcements ──────────────────────────────────────────────
 	// Staff and admin can read; admin only can write.
 	annRead := r.Group("/api/admin/announcements")
-	annRead.Use(kcAuth, handlers.RequireStaff)
+	annRead.Use(adminAuth, handlers.RequireStaff)
 	{
 		annRead.GET("", announcementH.List)
 		annRead.GET("/:id", announcementH.Get)
 	}
 	annWrite := r.Group("/api/admin/announcements")
-	annWrite.Use(kcAuth, handlers.RequireAdmin)
+	annWrite.Use(adminAuth, handlers.RequireAdmin)
 	{
 		annWrite.POST("", announcementH.Create)
 		annWrite.PUT("/:id", announcementH.Update)
@@ -91,13 +135,13 @@ func main() {
 
 	// ── Admin: Service Dates ──────────────────────────────────────────────
 	sdRead := r.Group("/api/admin/service-dates")
-	sdRead.Use(kcAuth, handlers.RequireStaff)
+	sdRead.Use(adminAuth, handlers.RequireStaff)
 	{
 		sdRead.GET("", serviceDateH.List)
 		sdRead.GET("/:id", serviceDateH.Get)
 	}
 	sdWrite := r.Group("/api/admin/service-dates")
-	sdWrite.Use(kcAuth, handlers.RequireAdmin)
+	sdWrite.Use(adminAuth, handlers.RequireAdmin)
 	{
 		sdWrite.POST("", serviceDateH.Create)
 		sdWrite.PUT("/:id", serviceDateH.Update)
@@ -106,13 +150,13 @@ func main() {
 
 	// ── Admin: Rooms ──────────────────────────────────────────────────────
 	roomRead := r.Group("/api/admin/rooms")
-	roomRead.Use(kcAuth, handlers.RequireStaff)
+	roomRead.Use(adminAuth, handlers.RequireStaff)
 	{
 		roomRead.GET("", roomH.List)
 		roomRead.GET("/:id", roomH.Get)
 	}
 	roomWrite := r.Group("/api/admin/rooms")
-	roomWrite.Use(kcAuth, handlers.RequireAdmin)
+	roomWrite.Use(adminAuth, handlers.RequireAdmin)
 	{
 		roomWrite.POST("", roomH.Create)
 		roomWrite.PUT("/:id", roomH.Update)
@@ -121,7 +165,7 @@ func main() {
 
 	// ── Admin: Records (staff + admin) ────────────────────────────────────
 	records := r.Group("/api/admin/records")
-	records.Use(kcAuth, handlers.RequireStaff)
+	records.Use(adminAuth, handlers.RequireStaff)
 	{
 		records.GET("", adminRecordH.List)
 		records.GET("/:id", adminRecordH.Get)
@@ -134,7 +178,7 @@ func main() {
 
 	// ── Admin: Staff Management (admin only) ──────────────────────────────
 	staffAdm := r.Group("/api/admin/staff")
-	staffAdm.Use(kcAuth, handlers.RequireAdmin)
+	staffAdm.Use(adminAuth, handlers.RequireAdmin)
 	{
 		staffAdm.GET("", staffH.List)
 		staffAdm.GET("/:id", staffH.Get)
@@ -205,5 +249,52 @@ func main() {
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("server failed: %v", err)
+	}
+}
+
+func envString(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Fatalf("invalid %s: %v", key, err)
+	}
+	return d
+}
+
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Fatalf("invalid %s: %v", key, err)
+	}
+	return b
+}
+
+func envSameSite(key string, fallback http.SameSite) http.SameSite {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "none":
+		return http.SameSiteNoneMode
+	case "lax":
+		return http.SameSiteLaxMode
+	case "strict":
+		return http.SameSiteStrictMode
+	case "":
+		return fallback
+	default:
+		log.Fatalf("invalid %s: must be none, lax, or strict", key)
+		return fallback
 	}
 }

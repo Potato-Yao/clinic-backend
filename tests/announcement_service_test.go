@@ -15,7 +15,7 @@ import (
 func setupAnnouncementServiceDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("failed to open test database: %v", err)
+		t.Fatalf("failed to open fake database: %v", err)
 	}
 	if err := db.AutoMigrate(&models.ClinicAnnouncement{}); err != nil {
 		t.Fatalf("failed to migrate ClinicAnnouncement model: %v", err)
@@ -231,8 +231,8 @@ func TestAnnouncementService_Create_DefaultTag(t *testing.T) {
 
 	a, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "Default Tag",
-		Content:    "test",
-		Brief:      "test",
+		Content:    "fake",
+		Brief:      "fake",
 		ExpireDate: futureDate(1),
 	})
 	if err != nil {
@@ -249,9 +249,9 @@ func TestAnnouncementService_Create_InvalidTag(t *testing.T) {
 
 	_, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "Bad Tag",
-		Content:    "test",
+		Content:    "fake",
 		Tag:        "invalid",
-		Brief:      "test",
+		Brief:      "fake",
 		ExpireDate: futureDate(1),
 	})
 	if !errors.Is(err, services.ErrAnnouncementInvalidTag) {
@@ -340,9 +340,9 @@ func TestAnnouncementService_Update_DuplicateTOS(t *testing.T) {
 
 	a2, err := svc.Create(services.CreateAnnouncementInput{
 		Title:      "Normal",
-		Content:    "test",
+		Content:    "fake",
 		Tag:        "normal",
-		Brief:      "test",
+		Brief:      "fake",
 		ExpireDate: futureDate(1),
 	})
 	if err != nil {
