@@ -20,6 +20,7 @@ func main() {
     <cas:attributes>
       <cas:name>Manual Tester</cas:name>
       <cas:groups>/clinic</cas:groups>
+      <cas:groups>/management</cas:groups>
     </cas:attributes>
   </cas:authenticationSuccess>
 </cas:serviceResponse>`)
