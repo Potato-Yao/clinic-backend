@@ -67,6 +67,8 @@ func main() {
 	adminRecordSvc := services.NewAdminRecordService(db)
 	adminRecordH := handlers.NewAdminRecordHandler(adminRecordSvc)
 
+	userH := handlers.NewUserHandler()
+
 	apiKey := os.Getenv("CLINIC_API_KEY")
 	if apiKey == "" {
 		log.Fatal("CLINIC_API_KEY not set")
@@ -103,12 +105,14 @@ func main() {
 		SessionTTL:     sessionTTL,
 	})
 
-	adminAuth := handlers.NewAdminAuthMiddleware(handlers.AdminAuthConfig{
+	authCfg := handlers.AdminAuthConfig{
 		SessionService: sessionSvc,
 		StaffService:   staffSvc,
 		KeycloakAuth:   keycloakAuth,
 		CookieName:     envString("SESSION_COOKIE_NAME", "sessionid"),
-	})
+	}
+	adminAuth := handlers.NewAdminAuthMiddleware(authCfg)
+	optionalAuth := handlers.NewOptionalAdminAuthMiddleware(authCfg)
 
 	r := gin.Default()
 	r.RedirectTrailingSlash = false
@@ -246,6 +250,12 @@ func main() {
 		wechat.DELETE("/:id", ticketH.Delete)
 		wechat.DELETE("/:id/", ticketH.Delete)
 	}
+
+	// ── User endpoints ────────────────────────────────────────────────────
+	r.GET("/api/user", adminAuth, userH.Current)
+	r.GET("/api/user/", adminAuth, userH.Current)
+	r.GET("/api/users/me", optionalAuth, userH.Me)
+	r.GET("/api/users/me/", optionalAuth, userH.Me)
 
 	if err := r.Run(":8080"); err != nil {
 		log.Fatalf("server failed: %v", err)

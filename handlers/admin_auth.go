@@ -184,6 +184,66 @@ func (m *adminAuthMiddleware) handleSession(c *gin.Context) {
 	c.Next()
 }
 
+// NewOptionalAdminAuthMiddleware returns a Gin middleware that tries to
+// authenticate via Bearer JWT or session cookie but never aborts the request.
+// If no credentials are found or they are invalid, the request continues as
+// anonymous (no staff/role in context).
+func NewOptionalAdminAuthMiddleware(cfg AdminAuthConfig) gin.HandlerFunc {
+	m := &adminAuthMiddleware{
+		sessionSvc: cfg.SessionService,
+		staffSvc:   cfg.StaffService,
+		kcAuth:     cfg.KeycloakAuth,
+		cookieName: cfg.CookieName,
+	}
+	return m.optionalHandle
+}
+
+func (m *adminAuthMiddleware) optionalHandle(c *gin.Context) {
+	auth := c.GetHeader("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		m.optionalTryBearer(c, strings.TrimPrefix(auth, "Bearer "))
+	} else {
+		m.optionalTrySession(c)
+	}
+	c.Next()
+}
+
+func (m *adminAuthMiddleware) optionalTryBearer(c *gin.Context, token string) {
+	if m.kcAuth == nil || !m.kcAuth.Configured() {
+		return
+	}
+	staff, role, err := m.kcAuth.Authenticate(token)
+	if err != nil {
+		return
+	}
+	c.Set(staffContextKey, staff)
+	c.Set(staffRoleContextKey, role)
+}
+
+func (m *adminAuthMiddleware) optionalTrySession(c *gin.Context) {
+	if m.sessionSvc == nil {
+		return
+	}
+
+	token, err := c.Cookie(m.cookieName)
+	if err != nil || token == "" {
+		return
+	}
+
+	sess, err := m.sessionSvc.Get(token)
+	if err != nil {
+		return
+	}
+
+	staff, err := m.staffSvc.GetByID(sess.StaffID)
+	if err != nil {
+		return
+	}
+
+	c.Set(staffContextKey, staff)
+	c.Set(staffRoleContextKey, StaffRole(sess.Role))
+}
+
 func isMutatingMethod(method string) bool {
 	switch method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
