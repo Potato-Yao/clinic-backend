@@ -21,21 +21,21 @@ func NewAnnouncementHandler(svc *services.AnnouncementService) *AnnouncementHand
 }
 
 type createAnnouncementRequest struct {
-	Title      string    `json:"title" binding:"required,max=20"`
-	Content    string    `json:"content" binding:"required"`
-	Tag        string    `json:"tag" binding:"max=16"`
-	Brief      string    `json:"brief" binding:"required,max=64"`
-	ExpireDate time.Time `json:"expireDate" binding:"required"`
-	Priority   uint      `json:"priority"`
+	Title      string `json:"title" binding:"required,max=20"`
+	Content    string `json:"content" binding:"required"`
+	Tag        string `json:"tag" binding:"max=16"`
+	Brief      string `json:"brief" binding:"required,max=64"`
+	ExpireDate string `json:"expireDate" binding:"required"`
+	Priority   uint   `json:"priority"`
 }
 
 type updateAnnouncementRequest struct {
-	Title      *string    `json:"title" binding:"omitempty,max=20"`
-	Content    *string    `json:"content"`
-	Tag        *string    `json:"tag" binding:"omitempty,max=16"`
-	Brief      *string    `json:"brief" binding:"omitempty,max=64"`
-	ExpireDate *time.Time `json:"expireDate"`
-	Priority   *uint      `json:"priority"`
+	Title      *string `json:"title" binding:"omitempty,max=20"`
+	Content    *string `json:"content"`
+	Tag        *string `json:"tag" binding:"omitempty,max=16"`
+	Brief      *string `json:"brief" binding:"omitempty,max=64"`
+	ExpireDate *string `json:"expireDate"`
+	Priority   *uint   `json:"priority"`
 }
 
 func (h *AnnouncementHandler) Create(c *gin.Context) {
@@ -44,7 +44,12 @@ func (h *AnnouncementHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := validateExpireDate(req.ExpireDate); err != nil {
+	expireDate, err := parseDateString(req.ExpireDate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateExpireDate(expireDate); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -54,7 +59,7 @@ func (h *AnnouncementHandler) Create(c *gin.Context) {
 		Content:    req.Content,
 		Tag:        models.AnnouncementTag(req.Tag),
 		Brief:      req.Brief,
-		ExpireDate: req.ExpireDate,
+		ExpireDate: expireDate,
 		Priority:   req.Priority,
 	})
 	if err != nil {
@@ -102,11 +107,18 @@ func (h *AnnouncementHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	var expireDate *time.Time
 	if req.ExpireDate != nil {
-		if err := validateExpireDate(*req.ExpireDate); err != nil {
+		parsed, err := parseDateString(*req.ExpireDate)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		if err := validateExpireDate(parsed); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		expireDate = &parsed
 	}
 
 	var tag *models.AnnouncementTag
@@ -120,7 +132,7 @@ func (h *AnnouncementHandler) Update(c *gin.Context) {
 		Content:    req.Content,
 		Tag:        tag,
 		Brief:      req.Brief,
-		ExpireDate: req.ExpireDate,
+		ExpireDate: expireDate,
 		Priority:   req.Priority,
 	})
 	if err != nil {
@@ -168,6 +180,18 @@ func parseID(c *gin.Context) (uint, bool) {
 		return 0, false
 	}
 	return uint(id), true
+}
+
+// parseDateString parses a date value sent by the admin frontend.
+// It accepts either "YYYY-MM-DD" or an RFC3339 timestamp for backwards compatibility.
+func parseDateString(s string) (time.Time, error) {
+	layouts := []string{"2006-01-02", time.RFC3339, time.RFC3339Nano}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC(), nil
+		}
+	}
+	return time.Time{}, errors.New("expireDate must be in YYYY-MM-DD or RFC3339 format")
 }
 
 // validateExpireDate rejects expiry dates in the past.

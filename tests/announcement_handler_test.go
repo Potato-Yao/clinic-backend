@@ -79,6 +79,22 @@ func TestAnnouncementHandler_Create_Success(t *testing.T) {
 	}
 }
 
+func TestAnnouncementHandler_Create_DateOnlyFormat(t *testing.T) {
+	r, _ := setupAnnouncementHandlerRouter(t)
+
+	w := doRequest(t, r, http.MethodPost, "/api/admin/announcements", map[string]any{
+		"title":      "Hello",
+		"content":    "body text",
+		"tag":        "normal",
+		"brief":      "short",
+		"expireDate": futureDate(7).Format("2006-01-02"),
+		"priority":   1,
+	})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestAnnouncementHandler_Create_Validation(t *testing.T) {
 	r, _ := setupAnnouncementHandlerRouter(t)
 
@@ -89,6 +105,7 @@ func TestAnnouncementHandler_Create_Validation(t *testing.T) {
 		{"missing title", map[string]any{"content": "c", "brief": "b", "expireDate": futureDate(1).Format(time.RFC3339)}},
 		{"title too long", map[string]any{"title": "012345678901234567890", "content": "c", "brief": "b", "expireDate": futureDate(1).Format(time.RFC3339)}},
 		{"past expireDate", map[string]any{"title": "T", "content": "c", "brief": "b", "expireDate": "2000-01-01T00:00:00Z"}},
+		{"invalid expireDate", map[string]any{"title": "T", "content": "c", "brief": "b", "expireDate": "not-a-date"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
