@@ -26,14 +26,15 @@ func setupServiceDateHandlerRouter(t *testing.T) (*gin.Engine, *services.Service
 	}
 	mustCreateRoom(t, db, 1)
 	mustCreateRoom(t, db, 2)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 	h := handlers.NewServiceDateHandler(svc)
 
 	r := gin.New()
 	g := r.Group("/api/admin/service-dates")
 	{
 		g.POST("", h.Create)
-		g.GET("", h.List)
+		g.GET("", h.AdminList)
+		g.GET("/all", h.ListAll)
 		g.GET("/:id", h.Get)
 		g.PUT("/:id", h.Update)
 		g.DELETE("/:id", h.Delete)
@@ -184,6 +185,38 @@ func TestServiceDateHandler_List(t *testing.T) {
 	}
 }
 
+func TestServiceDateHandler_List_DefaultExcludesPast(t *testing.T) {
+	r, svc, db := setupServiceDateHandlerRouter(t)
+	mustCreateServiceDate(t, db, svc, validServiceDateInput(1, -2, 5))
+	mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 2, 5))
+
+	w := doRequest(t, r, http.MethodGet, "/api/admin/service-dates", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Items []models.ClinicServiceDate `json:"items"`
+		Total int64                      `json:"total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if resp.Total != 1 || len(resp.Items) != 1 {
+		t.Errorf("expected 1 future item, got total %d / %d items", resp.Total, len(resp.Items))
+	}
+
+	w = doRequest(t, r, http.MethodGet, "/api/admin/service-dates/all", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if resp.Total != 2 || len(resp.Items) != 2 {
+		t.Errorf("expected 2 items from /all, got total %d / %d items", resp.Total, len(resp.Items))
+	}
+}
+
 func TestServiceDateHandler_Update_Partial(t *testing.T) {
 	r, svc, db := setupServiceDateHandlerRouter(t)
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 3, 10))
@@ -299,7 +332,7 @@ func TestServiceDateHandler_ClientList_AvailableOnly(t *testing.T) {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	mustCreateRoom(t, db, 1)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 	h := handlers.NewServiceDateHandler(svc)
 	r := gin.New()
 	r.GET("/api/service-dates", h.List)

@@ -43,7 +43,7 @@ func (h *ServiceDateHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := validateServiceDateWindow(req.Date, req.StartTime, req.EndTime); err != nil {
+	if err := h.validateServiceDateWindow(req.Date, req.StartTime, req.EndTime); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -77,8 +77,23 @@ func (h *ServiceDateHandler) Get(c *gin.Context) {
 }
 
 func (h *ServiceDateHandler) List(c *gin.Context) {
+	h.list(c, c.Query("active") == "true", nil)
+}
+
+// AdminList returns service dates from today onward by default.
+func (h *ServiceDateHandler) AdminList(c *gin.Context) {
+	h.list(c, true, h.svc.Location())
+}
+
+// ListAll returns all service dates regardless of date.
+func (h *ServiceDateHandler) ListAll(c *gin.Context) {
+	h.list(c, false, nil)
+}
+
+func (h *ServiceDateHandler) list(c *gin.Context, activeOnly bool, todayLoc *time.Location) {
 	f := services.ListServiceDateFilter{
-		ActiveOnly:  c.Query("active") == "true",
+		ActiveOnly:  activeOnly,
+		TodayLoc:    todayLoc,
 		HasCapacity: c.Query("available") == "true",
 	}
 	if v, err := strconv.ParseUint(c.Query("room_id"), 10, 64); err == nil && v > 0 {
@@ -113,7 +128,7 @@ func (h *ServiceDateHandler) Update(c *gin.Context) {
 	effStart := req.StartTime
 	effEnd := req.EndTime
 	if effDate != nil && effStart != nil && effEnd != nil {
-		if err := validateServiceDateWindow(*effDate, *effStart, *effEnd); err != nil {
+		if err := h.validateServiceDateWindow(*effDate, *effStart, *effEnd); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -158,9 +173,10 @@ func writeServiceDateError(c *gin.Context, err error) {
 }
 
 // validateServiceDateWindow rejects past dates and inverted or same-day-spanning windows.
-func validateServiceDateWindow(date, start, end time.Time) error {
-	today := time.Now().UTC().Truncate(24 * time.Hour)
-	if date.Truncate(24 * time.Hour).Before(today) {
+func (h *ServiceDateHandler) validateServiceDateWindow(date, start, end time.Time) error {
+	loc := h.svc.Location()
+	today := time.Now().In(loc).Truncate(24 * time.Hour)
+	if date.In(loc).Truncate(24 * time.Hour).Before(today) {
 		return errors.New("date must not be in the past")
 	}
 	if !start.Before(end) {

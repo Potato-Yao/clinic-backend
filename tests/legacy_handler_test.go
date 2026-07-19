@@ -38,7 +38,7 @@ func setupLegacyHandlerRouter(t *testing.T) (*gin.Engine, *gorm.DB, *services.Ti
 	}
 
 	ticketSvc := services.NewTicketService(db)
-	serviceDateSvc := services.NewServiceDateService(db)
+	serviceDateSvc := services.NewServiceDateService(db, nil)
 	roomSvc := services.NewRoomService(db)
 	announceSvc := services.NewAnnouncementService(db)
 	legacyH := handlers.NewLegacyHandler(ticketSvc, serviceDateSvc, roomSvc, announceSvc)
@@ -59,6 +59,7 @@ func setupLegacyHandlerRouter(t *testing.T) (*gin.Engine, *gorm.DB, *services.Ti
 		// Catalog
 		authed.GET("/api/campus", legacyH.ListCampus)
 		authed.GET("/api/date", legacyH.ListDates)
+		authed.GET("/api/date/all", legacyH.ListAllDates)
 		authed.GET("/api/announcement", legacyH.ListAnnouncements)
 	}
 
@@ -465,6 +466,93 @@ func TestLegacy_Dates_Shape(t *testing.T) {
 	}
 	if _, ok := d["working"]; !ok {
 		t.Errorf("missing working field")
+	}
+}
+
+func TestLegacy_Dates_DefaultExcludesPast(t *testing.T) {
+	r, db, _ := setupLegacyHandlerRouter(t)
+	room := models.ClinicRoom{Name: "中关村", Address: "addr", Enabled: true}
+	if err := db.Create(&room).Error; err != nil {
+		t.Fatalf("seed room: %v", err)
+	}
+	pastDate := futureTruncatedDate(-7)
+	futureDate := futureTruncatedDate(7)
+	for _, d := range []struct {
+		date  time.Time
+		title string
+	}{
+		{pastDate, "past"},
+		{futureDate, "future"},
+	} {
+		sd := models.ClinicServiceDate{
+			Capacity:  10,
+			RoomID:    &room.ID,
+			Date:      d.date,
+			StartTime: d.date.Add(9 * time.Hour),
+			EndTime:   d.date.Add(17 * time.Hour),
+			Title:     d.title,
+		}
+		if err := db.Create(&sd).Error; err != nil {
+			t.Fatalf("seed service date %s: %v", d.title, err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, signedTicketReq(http.MethodGet, "/api/date", nil, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 active date, got %d", len(items))
+	}
+	if items[0]["date"] != futureDate.Format("2006-01-02") {
+		t.Errorf("expected future date, got %v", items[0]["date"])
+	}
+}
+
+func TestLegacy_DatesAll_IncludesPast(t *testing.T) {
+	r, db, _ := setupLegacyHandlerRouter(t)
+	room := models.ClinicRoom{Name: "中关村", Address: "addr", Enabled: true}
+	if err := db.Create(&room).Error; err != nil {
+		t.Fatalf("seed room: %v", err)
+	}
+	pastDate := futureTruncatedDate(-7)
+	futureDate := futureTruncatedDate(7)
+	for _, d := range []struct {
+		date  time.Time
+		title string
+	}{
+		{pastDate, "past"},
+		{futureDate, "future"},
+	} {
+		sd := models.ClinicServiceDate{
+			Capacity:  10,
+			RoomID:    &room.ID,
+			Date:      d.date,
+			StartTime: d.date.Add(9 * time.Hour),
+			EndTime:   d.date.Add(17 * time.Hour),
+			Title:     d.title,
+		}
+		if err := db.Create(&sd).Error; err != nil {
+			t.Fatalf("seed service date %s: %v", d.title, err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, signedTicketReq(http.MethodGet, "/api/date/all", nil, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &items); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 dates, got %d", len(items))
 	}
 }
 

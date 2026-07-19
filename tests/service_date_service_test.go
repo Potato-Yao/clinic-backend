@@ -51,7 +51,7 @@ func validServiceDateInput(roomID uint, daysFromNow int, cap uint) services.Crea
 
 func TestServiceDateService_Create(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 	mustCreateRoom(t, db, 1)
 
 	d, err := svc.Create(validServiceDateInput(1, 5, 10))
@@ -68,7 +68,7 @@ func TestServiceDateService_Create(t *testing.T) {
 
 func TestServiceDateService_GetByID_NotFound(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	_, err := svc.GetByID(999)
 	if !errors.Is(err, services.ErrServiceDateNotFound) {
@@ -78,7 +78,7 @@ func TestServiceDateService_GetByID_NotFound(t *testing.T) {
 
 func TestServiceDateService_Create_RoomNotFound(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	_, err := svc.Create(validServiceDateInput(999, 5, 10))
 	if !errors.Is(err, services.ErrServiceDateRoomNotFound) {
@@ -88,7 +88,7 @@ func TestServiceDateService_Create_RoomNotFound(t *testing.T) {
 
 func TestServiceDateService_List_Filter(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	room1 := uint(1)
 	room2 := uint(2)
@@ -143,7 +143,7 @@ func TestServiceDateService_List_Filter(t *testing.T) {
 
 func TestServiceDateService_List_HasCapacity(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	roomID := uint(1)
 	mustCreateRoom(t, db, roomID)
@@ -179,7 +179,7 @@ func TestServiceDateService_List_HasCapacity(t *testing.T) {
 
 func TestServiceDateService_Update_Partial(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 5, 10))
 	newTitle := "Closed Day"
@@ -194,7 +194,7 @@ func TestServiceDateService_Update_Partial(t *testing.T) {
 
 func TestServiceDateService_Update_NotFound(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	newTitle := "x"
 	_, err := svc.Update(999, services.UpdateServiceDateInput{Title: &newTitle})
@@ -205,7 +205,7 @@ func TestServiceDateService_Update_NotFound(t *testing.T) {
 
 func TestServiceDateService_Update_RoomNotFound(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 5, 10))
 
 	badRoom := uint(999)
@@ -217,7 +217,7 @@ func TestServiceDateService_Update_RoomNotFound(t *testing.T) {
 
 func TestServiceDateService_Update_InUse(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 	mustCreateRoom(t, db, 1)
 	mustCreateRoom(t, db, 2)
 
@@ -279,7 +279,7 @@ func TestServiceDateService_Update_InUse(t *testing.T) {
 
 func TestServiceDateService_Delete_Success(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 5, 10))
 	if err := svc.Delete(d.ID); err != nil {
@@ -292,7 +292,7 @@ func TestServiceDateService_Delete_Success(t *testing.T) {
 
 func TestServiceDateService_Delete_NotFound(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	if err := svc.Delete(999); !errors.Is(err, services.ErrServiceDateNotFound) {
 		t.Fatalf("expected ErrServiceDateNotFound, got %v", err)
@@ -301,7 +301,7 @@ func TestServiceDateService_Delete_NotFound(t *testing.T) {
 
 func TestServiceDateService_Delete_InUse(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
-	svc := services.NewServiceDateService(db)
+	svc := services.NewServiceDateService(db, nil)
 
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 5, 10))
 	if err := db.Create(&models.ClinicRecord{

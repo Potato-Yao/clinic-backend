@@ -22,11 +22,27 @@ var ErrServiceDateRoomNotFound = errors.New("room does not exist")
 
 // ServiceDateService contains the business logic for service date CRUD.
 type ServiceDateService struct {
-	db *gorm.DB
+	db  *gorm.DB
+	loc *time.Location
 }
 
-func NewServiceDateService(db *gorm.DB) *ServiceDateService {
-	return &ServiceDateService{db: db}
+// defaultServiceDateLocation returns UTC+8, used when no timezone is supplied.
+func defaultServiceDateLocation() *time.Location {
+	return time.FixedZone("UTC+8", 8*60*60)
+}
+
+// NewServiceDateService creates a new ServiceDateService.
+// If loc is nil, UTC+8 is used as the default timezone.
+func NewServiceDateService(db *gorm.DB, loc *time.Location) *ServiceDateService {
+	if loc == nil {
+		loc = defaultServiceDateLocation()
+	}
+	return &ServiceDateService{db: db, loc: loc}
+}
+
+// Location returns the timezone used for date comparisons.
+func (s *ServiceDateService) Location() *time.Location {
+	return s.loc
 }
 
 // CreateServiceDateInput carries the fields a caller may set on creation.
@@ -53,9 +69,10 @@ type UpdateServiceDateInput struct {
 // ListServiceDateFilter controls listing behavior.
 type ListServiceDateFilter struct {
 	RoomID      *uint
-	FromDate    time.Time // inclusive lower bound on date, zero means unbounded
-	ActiveOnly  bool      // date >= today
-	HasCapacity bool      // for students: booked count < capacity
+	FromDate    time.Time      // inclusive lower bound on date, zero means unbounded
+	ActiveOnly  bool           // date >= today
+	TodayLoc    *time.Location // timezone used for "today"; nil means UTC
+	HasCapacity bool           // for students: booked count < capacity
 	Page        int
 	PageSize    int
 }
@@ -154,7 +171,11 @@ func (s *ServiceDateService) List(f ListServiceDateFilter) ([]models.ClinicServi
 		q = q.Where("date >= ?", f.FromDate.Truncate(24*time.Hour))
 	}
 	if f.ActiveOnly {
-		q = q.Where("date >= ?", time.Now().UTC().Truncate(24*time.Hour))
+		today := time.Now().UTC().Truncate(24 * time.Hour)
+		if f.TodayLoc != nil {
+			today = time.Now().In(f.TodayLoc).Truncate(24 * time.Hour)
+		}
+		q = q.Where("date >= ?", today)
 	}
 
 	var total int64

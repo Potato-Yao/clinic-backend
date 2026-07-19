@@ -342,18 +342,31 @@ func (h *LegacyHandler) ListCampus(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
-// ── Service Dates (old: /api/date/) ─────────────────────────────────────
+// dateItem is the legacy /api/date/ response shape.
+type dateItem struct {
+	ID        uint   `json:"id"`
+	Title     string `json:"title"`
+	Date      string `json:"date"`
+	Capacity  uint   `json:"capacity"`
+	Campus    string `json:"campus"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+	Count     int64  `json:"count"`
+	Finish    int    `json:"finish"`
+	Working   int    `json:"working"`
+}
 
-func (h *LegacyHandler) ListDates(c *gin.Context) {
+// listDateItems returns service dates formatted for the legacy endpoint.
+// When activeOnly is true, only dates from today onward are returned.
+func (h *LegacyHandler) listDateItems(activeOnly bool) ([]dateItem, error) {
 	f := services.ListServiceDateFilter{
-		ActiveOnly: true,
+		ActiveOnly: activeOnly,
 		Page:       1,
 		PageSize:   1000,
 	}
 	dates, _, err := h.serviceDateSvc.List(f)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+		return nil, err
 	}
 
 	// Build a room-id → room-name map for joining.
@@ -364,18 +377,6 @@ func (h *LegacyHandler) ListDates(c *gin.Context) {
 		roomNames[r.ID] = r.Name
 	}
 
-	type dateItem struct {
-		ID        uint   `json:"id"`
-		Title     string `json:"title"`
-		Date      string `json:"date"`
-		Capacity  uint   `json:"capacity"`
-		Campus    string `json:"campus"`
-		StartTime string `json:"startTime"`
-		EndTime   string `json:"endTime"`
-		Count     int64  `json:"count"`
-		Finish    int    `json:"finish"`
-		Working   int    `json:"working"`
-	}
 	items := make([]dateItem, 0, len(dates))
 	for _, d := range dates {
 		campus := ""
@@ -394,6 +395,28 @@ func (h *LegacyHandler) ListDates(c *gin.Context) {
 			Finish:    0, // not exposed by new backend; kept for shape compat
 			Working:   0,
 		})
+	}
+	return items, nil
+}
+
+// ── Service Dates (old: /api/date/) ─────────────────────────────────────
+
+// ListDates returns service dates from today onward.
+func (h *LegacyHandler) ListDates(c *gin.Context) {
+	items, err := h.listDateItems(true)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+// ListAllDates returns all service dates regardless of date.
+func (h *LegacyHandler) ListAllDates(c *gin.Context) {
+	items, err := h.listDateItems(false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 	c.JSON(http.StatusOK, items)
 }

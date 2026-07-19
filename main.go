@@ -49,7 +49,8 @@ func main() {
 	announcementSvc := services.NewAnnouncementService(db)
 	announcementH := handlers.NewAnnouncementHandler(announcementSvc)
 
-	serviceDateSvc := services.NewServiceDateService(db)
+	serviceDateLoc := envLocation("CLINIC_TIMEZONE", time.FixedZone("UTC+8", 8*60*60))
+	serviceDateSvc := services.NewServiceDateService(db, serviceDateLoc)
 	serviceDateH := handlers.NewServiceDateHandler(serviceDateSvc)
 
 	roomSvc := services.NewRoomService(db)
@@ -142,7 +143,8 @@ func main() {
 	sdRead := r.Group("/api/admin/service-dates")
 	sdRead.Use(adminAuth, handlers.RequireStaff)
 	{
-		sdRead.GET("", serviceDateH.List)
+		sdRead.GET("", serviceDateH.AdminList)
+		sdRead.GET("/all", serviceDateH.ListAll)
 		sdRead.GET("/:id", serviceDateH.Get)
 	}
 	sdWrite := r.Group("/api/admin/service-dates")
@@ -270,6 +272,8 @@ func main() {
 	{
 		sd.GET("", legacyH.ListDates)
 		sd.GET("/", legacyH.ListDates)
+		sd.GET("/all", legacyH.ListAllDates)
+		sd.GET("/all/", legacyH.ListAllDates)
 	}
 
 	// /api/announcement/ — plain array of active announcements
@@ -336,4 +340,16 @@ func envSameSite(key string, fallback http.SameSite) http.SameSite {
 		log.Fatalf("invalid %s: must be none, lax, or strict", key)
 		return fallback
 	}
+}
+
+func envLocation(key string, fallback *time.Location) *time.Location {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	loc, err := time.LoadLocation(v)
+	if err != nil {
+		log.Fatalf("invalid %s: %v", key, err)
+	}
+	return loc
 }
