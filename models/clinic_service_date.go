@@ -11,6 +11,7 @@ type ClinicServiceDate struct {
 	StartTime time.Time `gorm:"type:datetime;not null;column:startTime" json:"startTime"`
 	EndTime   time.Time `gorm:"type:datetime;not null;column:endTime" json:"endTime"`
 	Title     string    `gorm:"size:20;not null;column:title" json:"title"`
+	Count     int64     `gorm:"-" json:"count"`
 }
 
 // TableName overrides GORM's default pluralized table name.

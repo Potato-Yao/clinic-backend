@@ -86,6 +86,11 @@ func (s *ServiceDateService) GetByID(id uint) (models.ClinicServiceDate, error) 
 		}
 		return models.ClinicServiceDate{}, fmt.Errorf("get service date %d: %w", id, err)
 	}
+	booked, err := s.bookedCount(d.RoomID, d.Date)
+	if err != nil {
+		return models.ClinicServiceDate{}, err
+	}
+	d.Count = booked
 	return d, nil
 }
 
@@ -126,6 +131,20 @@ func (s *ServiceDateService) recordsExistFor(tx *gorm.DB, roomID uint, date time
 	return n > 0, nil
 }
 
+// bookedCount returns the number of active (non-rejected, non-noshow) records
+// for the given room+date combination.
+func (s *ServiceDateService) bookedCount(roomID *uint, date time.Time) (int64, error) {
+	var n int64
+	q := s.db.Model(&models.ClinicRecord{}).
+		Where("room = ? AND appointment_time = ? AND status NOT IN ?",
+			roomID, date.Truncate(24*time.Hour),
+			[]models.RecordStatus{models.RecordStatusRejected, models.RecordStatusNoShow})
+	if err := q.Count(&n).Error; err != nil {
+		return 0, fmt.Errorf("count booked: %w", err)
+	}
+	return n, nil
+}
+
 func (s *ServiceDateService) List(f ListServiceDateFilter) ([]models.ClinicServiceDate, int64, error) {
 	q := s.db.Model(&models.ClinicServiceDate{})
 	if f.RoomID != nil {
@@ -160,24 +179,18 @@ func (s *ServiceDateService) List(f ListServiceDateFilter) ([]models.ClinicServi
 		return nil, 0, fmt.Errorf("list service dates: %w", err)
 	}
 
-	if f.HasCapacity {
-		filtered := items[:0]
-		for _, d := range items {
-			var booked int64
-			if err := s.db.Model(&models.ClinicRecord{}).
-				Where("room = ? AND appointment_time = ? AND status NOT IN ?",
-					d.RoomID, d.Date.Truncate(24*time.Hour),
-					[]models.RecordStatus{models.RecordStatusRejected, models.RecordStatusNoShow},
-				).
-				Count(&booked).Error; err != nil {
-				return nil, 0, fmt.Errorf("count booked for service date %d: %w", d.ID, err)
-			}
-			if booked < int64(d.Capacity) {
-				filtered = append(filtered, d)
-			}
+	filtered := items[:0]
+	for _, d := range items {
+		booked, err := s.bookedCount(d.RoomID, d.Date)
+		if err != nil {
+			return nil, 0, fmt.Errorf("count booked for service date %d: %w", d.ID, err)
 		}
-		items = filtered
+		d.Count = booked
+		if !f.HasCapacity || booked < int64(d.Capacity) {
+			filtered = append(filtered, d)
+		}
 	}
+	items = filtered
 	return items, total, nil
 }
 

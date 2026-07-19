@@ -182,59 +182,6 @@ func TestAnnouncementHandler_InvalidID(t *testing.T) {
 	}
 }
 
-func setupTOSHandlerRouter(t *testing.T) (*gin.Engine, *services.AnnouncementService) {
-	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("failed to open fake database: %v", err)
-	}
-	if err := db.AutoMigrate(&models.ClinicAnnouncement{}); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
-	}
-	svc := services.NewAnnouncementService(db)
-	h := handlers.NewAnnouncementHandler(svc)
-
-	r := gin.New()
-	r.GET("/api/announcement/toc", h.TOS)
-	r.GET("/api/announcement/toc/", h.TOS)
-	return r, svc
-}
-
-func TestAnnouncementHandler_TOS_Success(t *testing.T) {
-	r, svc := setupTOSHandlerRouter(t)
-	_, err := svc.Create(services.CreateAnnouncementInput{
-		Title:      "Terms",
-		Content:    "content",
-		Tag:        "tos",
-		Brief:      "brief",
-		ExpireDate: futureDate(30),
-	})
-	if err != nil {
-		t.Fatalf("seed tos failed: %v", err)
-	}
-
-	w := doRequest(t, r, http.MethodGet, "/api/announcement/toc/", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var got models.ClinicAnnouncement
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode failed: %v", err)
-	}
-	if got.Title != "Terms" || got.Content != "content" {
-		t.Errorf("unexpected announcement: %+v", got)
-	}
-}
-
-func TestAnnouncementHandler_TOS_NotFound(t *testing.T) {
-	r, _ := setupTOSHandlerRouter(t)
-
-	w := doRequest(t, r, http.MethodGet, "/api/announcement/toc", nil)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
 func itoa(n uint) string {
 	return strconv.Itoa(int(n))
 }

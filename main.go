@@ -57,6 +57,7 @@ func main() {
 
 	ticketSvc := services.NewTicketService(db)
 	ticketH := handlers.NewTicketHandler(ticketSvc)
+	legacyH := handlers.NewLegacyHandler(ticketSvc, serviceDateSvc, roomSvc, announcementSvc)
 
 	staffSvc := services.NewStaffService(db)
 	staffH := handlers.NewStaffHandler(staffSvc)
@@ -225,30 +226,58 @@ func main() {
 		ticket.DELETE("/:id", ticketH.Delete)
 	}
 
-	// ── Public: Terms of Service ───────────────────────────────────────────
-	r.GET("/api/announcement/toc", announcementH.TOS)
-	r.GET("/api/announcement/toc/", announcementH.TOS)
+	// ── Legacy customer endpoints (old Django shapes) ─────────────────────
+	// TOS — returns {"content": ...} matching Django's /api/announcement/toc/
+	r.GET("/api/announcement/toc", legacyH.TOS)
+	r.GET("/api/announcement/toc/", legacyH.TOS)
 
-	// Legacy /api/wechat alias.
+	// /api/wechat — ticket lifecycle in old Django DRF shape (int status,
+	// {count,next,previous,results} pagination, /api/wechat/{id}/ url).
 	wechat := r.Group("/api/wechat")
 	wechat.Use(clientAuth)
 	{
-		wechat.GET("", ticketH.List)
-		wechat.GET("/", ticketH.List)
-		wechat.POST("", ticketH.Create)
-		wechat.POST("/", ticketH.Create)
-		wechat.GET("/working", ticketH.Working)
-		wechat.GET("/working/", ticketH.Working)
-		wechat.GET("/finished", ticketH.Finished)
-		wechat.GET("/finished/", ticketH.Finished)
-		wechat.GET("/:id", ticketH.Get)
-		wechat.GET("/:id/", ticketH.Get)
-		wechat.PUT("/:id", ticketH.Update)
-		wechat.PUT("/:id/", ticketH.Update)
-		wechat.PATCH("/:id", ticketH.Update)
-		wechat.PATCH("/:id/", ticketH.Update)
-		wechat.DELETE("/:id", ticketH.Delete)
-		wechat.DELETE("/:id/", ticketH.Delete)
+		wechat.GET("", legacyH.ListRecords)
+		wechat.GET("/", legacyH.ListRecords)
+		wechat.POST("", legacyH.CreateRecord)
+		wechat.POST("/", legacyH.CreateRecord)
+		wechat.GET("/working", legacyH.WorkingRecord)
+		wechat.GET("/working/", legacyH.WorkingRecord)
+		wechat.GET("/finished", legacyH.FinishRecords)
+		wechat.GET("/finished/", legacyH.FinishRecords)
+		wechat.GET("/finish", legacyH.FinishRecords)
+		wechat.GET("/finish/", legacyH.FinishRecords)
+		wechat.GET("/:id", legacyH.GetRecord)
+		wechat.GET("/:id/", legacyH.GetRecord)
+		wechat.PUT("/:id", legacyH.UpdateRecord)
+		wechat.PUT("/:id/", legacyH.UpdateRecord)
+		wechat.PATCH("/:id", legacyH.UpdateRecord)
+		wechat.PATCH("/:id/", legacyH.UpdateRecord)
+		wechat.DELETE("/:id", legacyH.DeleteRecord)
+		wechat.DELETE("/:id/", legacyH.DeleteRecord)
+	}
+
+	// /api/campus/ — plain array [{name, address}]
+	campus := r.Group("/api/campus")
+	campus.Use(clientAuth)
+	{
+		campus.GET("", legacyH.ListCampus)
+		campus.GET("/", legacyH.ListCampus)
+	}
+
+	// /api/date/ — plain array of service dates with room name & count
+	sd := r.Group("/api/date")
+	sd.Use(clientAuth)
+	{
+		sd.GET("", legacyH.ListDates)
+		sd.GET("/", legacyH.ListDates)
+	}
+
+	// /api/announcement/ — plain array of active announcements
+	ann := r.Group("/api/announcement")
+	ann.Use(clientAuth)
+	{
+		ann.GET("", legacyH.ListAnnouncements)
+		ann.GET("/", legacyH.ListAnnouncements)
 	}
 
 	// ── User endpoints ────────────────────────────────────────────────────
