@@ -203,25 +203,47 @@ func (s *ServiceDateService) Update(id uint, in UpdateServiceDateInput) (models.
 		return models.ClinicServiceDate{}, fmt.Errorf("get service date %d for update: %w", id, err)
 	}
 
-	// Determine the effective room+date after the update for the in-use guard.
-	roomID := *d.RoomID
+	originalRoomID := *d.RoomID
+	originalDate := d.Date.Truncate(24 * time.Hour)
+	effectiveRoomID := originalRoomID
+	effectiveDate := originalDate
 	if in.RoomID != nil {
-		roomID = *in.RoomID
-		if err := s.assertRoomExists(roomID); err != nil {
+		if err := s.assertRoomExists(*in.RoomID); err != nil {
 			return models.ClinicServiceDate{}, err
 		}
+		effectiveRoomID = *in.RoomID
 	}
-	date := d.Date
 	if in.Date != nil {
-		date = *in.Date
+		effectiveDate = in.Date.Truncate(24 * time.Hour)
 	}
 
-	inUse, err := s.recordsExistFor(s.db, roomID, date)
-	if err != nil {
-		return models.ClinicServiceDate{}, err
+	roomChanged := effectiveRoomID != originalRoomID
+	dateChanged := !effectiveDate.Equal(originalDate)
+	if roomChanged || dateChanged {
+		inUse, err := s.recordsExistFor(s.db, originalRoomID, originalDate)
+		if err != nil {
+			return models.ClinicServiceDate{}, err
+		}
+		if inUse {
+			return models.ClinicServiceDate{}, ErrServiceDateInUse
+		}
+		inUse, err = s.recordsExistFor(s.db, effectiveRoomID, effectiveDate)
+		if err != nil {
+			return models.ClinicServiceDate{}, err
+		}
+		if inUse {
+			return models.ClinicServiceDate{}, ErrServiceDateInUse
+		}
 	}
-	if inUse {
-		return models.ClinicServiceDate{}, ErrServiceDateInUse
+
+	if in.Capacity != nil {
+		booked, err := s.bookedCount(&effectiveRoomID, effectiveDate)
+		if err != nil {
+			return models.ClinicServiceDate{}, err
+		}
+		if *in.Capacity < uint(booked) {
+			return models.ClinicServiceDate{}, fmt.Errorf("capacity cannot be less than current booked count %d: %w", booked, ErrServiceDateInUse)
+		}
 	}
 
 	updates := map[string]any{}

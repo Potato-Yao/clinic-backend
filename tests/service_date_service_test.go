@@ -218,6 +218,8 @@ func TestServiceDateService_Update_RoomNotFound(t *testing.T) {
 func TestServiceDateService_Update_InUse(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
 	svc := services.NewServiceDateService(db)
+	mustCreateRoom(t, db, 1)
+	mustCreateRoom(t, db, 2)
 
 	d := mustCreateServiceDate(t, db, svc, validServiceDateInput(1, 5, 10))
 	if err := db.Create(&models.ClinicRecord{
@@ -230,10 +232,48 @@ func TestServiceDateService_Update_InUse(t *testing.T) {
 		t.Fatalf("seed record failed: %v", err)
 	}
 
-	newTitle := "Too Late"
-	_, err := svc.Update(d.ID, services.UpdateServiceDateInput{Title: &newTitle})
+	// Title changes should be allowed when records exist.
+	newTitle := "New Title"
+	if _, err := svc.Update(d.ID, services.UpdateServiceDateInput{Title: &newTitle}); err != nil {
+		t.Fatalf("title update should succeed, got %v", err)
+	}
+
+	// Room changes should be blocked when records exist.
+	newRoom := uint(2)
+	_, err := svc.Update(d.ID, services.UpdateServiceDateInput{RoomID: &newRoom})
 	if !errors.Is(err, services.ErrServiceDateInUse) {
-		t.Fatalf("expected ErrServiceDateInUse, got %v", err)
+		t.Fatalf("room change should be blocked, expected ErrServiceDateInUse, got %v", err)
+	}
+
+	// Sending the unchanged room/date payload with a capacity update should be allowed.
+	sameRoom := uint(1)
+	sameDate := d.Date
+	updatedTitle := "Updated Title"
+	newStart := d.StartTime
+	newEnd := d.EndTime
+	newCap := uint(11)
+	if _, err := svc.Update(d.ID, services.UpdateServiceDateInput{
+		Capacity:  &newCap,
+		RoomID:    &sameRoom,
+		Date:      &sameDate,
+		StartTime: &newStart,
+		EndTime:   &newEnd,
+		Title:     &updatedTitle,
+	}); err != nil {
+		t.Fatalf("unchanged room/date payload should succeed, got %v", err)
+	}
+
+	// Capacity changes below booked count should be blocked.
+	newCap = uint(0)
+	_, err = svc.Update(d.ID, services.UpdateServiceDateInput{Capacity: &newCap})
+	if !errors.Is(err, services.ErrServiceDateInUse) {
+		t.Fatalf("capacity below booked should be blocked, expected ErrServiceDateInUse, got %v", err)
+	}
+
+	// Capacity changes at or above booked count should be allowed.
+	newCap = uint(10)
+	if _, err = svc.Update(d.ID, services.UpdateServiceDateInput{Capacity: &newCap}); err != nil {
+		t.Fatalf("capacity >= booked should succeed, got %v", err)
 	}
 }
 

@@ -214,9 +214,41 @@ func TestServiceDateHandler_Update_InUse(t *testing.T) {
 		t.Fatalf("seed record failed: %v", err)
 	}
 
+	// Title changes should be allowed when records exist.
 	w := doRequest(t, r, http.MethodPut, "/api/admin/service-dates/"+itoa(d.ID), map[string]any{"title": "x"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("title update should succeed, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// A full payload with unchanged room/date should still allow capacity edits.
+	w = doRequest(t, r, http.MethodPut, "/api/admin/service-dates/"+itoa(d.ID), map[string]any{
+		"title":     "x",
+		"room_id":   1,
+		"capacity":  11,
+		"date":      d.Date,
+		"startTime": d.StartTime,
+		"endTime":   d.EndTime,
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("full unchanged payload should succeed, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Room changes should be blocked when records exist.
+	w = doRequest(t, r, http.MethodPut, "/api/admin/service-dates/"+itoa(d.ID), map[string]any{"room_id": 2})
 	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("room change should be blocked, expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Capacity changes below booked count should be blocked.
+	w = doRequest(t, r, http.MethodPut, "/api/admin/service-dates/"+itoa(d.ID), map[string]any{"capacity": 0})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("capacity below booked should be blocked, expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Capacity changes at or above booked count should be allowed.
+	w = doRequest(t, r, http.MethodPut, "/api/admin/service-dates/"+itoa(d.ID), map[string]any{"capacity": 10})
+	if w.Code != http.StatusOK {
+		t.Fatalf("capacity >= booked should succeed, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
