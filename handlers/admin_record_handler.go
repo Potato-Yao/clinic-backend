@@ -202,13 +202,19 @@ func (h *AdminRecordHandler) Refer(c *gin.Context) {
 		return
 	}
 
+	staff, ok := contextStaff(c)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing staff context"})
+		return
+	}
+
 	var req referRecordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	v, err := h.svc.MarkReferred(id, req.Reason)
+	v, err := h.svc.MarkReferred(id, req.Reason, uint(staff.ID))
 	if err != nil {
 		writeRecordError(c, err)
 		return

@@ -397,7 +397,7 @@ func (s *AdminRecordService) MarkRejected(id uint, reason string, approverID uin
 	return v, nil
 }
 
-func (s *AdminRecordService) MarkReferred(id uint, reason string) (AdminRecordView, error) {
+func (s *AdminRecordService) MarkReferred(id uint, reason string, approverID uint) (AdminRecordView, error) {
 	var rec models.ClinicRecord
 	if err := s.db.First(&rec, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -413,7 +413,11 @@ func (s *AdminRecordService) MarkReferred(id uint, reason string) (AdminRecordVi
 
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&rec).Update("status", models.RecordStatusReferred).Error; err != nil {
+		updates := map[string]any{
+			"status":      models.RecordStatusReferred,
+			"approver_id": approverID,
+		}
+		if err := tx.Model(&rec).Updates(updates).Error; err != nil {
 			return fmt.Errorf("mark referred record %d: %w", id, err)
 		}
 
