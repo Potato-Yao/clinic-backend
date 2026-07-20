@@ -77,7 +77,7 @@ func (s *AnnouncementService) Create(in CreateAnnouncementInput) (models.ClinicA
 		Content:        in.Content,
 		Tag:            in.Tag,
 		Brief:          in.Brief,
-		ExpireDate:     in.ExpireDate,
+		ExpireDate:     DateInLocation(in.ExpireDate, nil),
 		Priority:       in.Priority,
 		CreatedTime:    now,
 		LastEditedTime: now,
@@ -116,7 +116,7 @@ func (s *AnnouncementService) List(f ListAnnouncementFilter) ([]models.ClinicAnn
 		q = q.Where("tag = ?", f.Tag)
 	}
 	if f.ActiveOnly {
-		q = q.Where("(expireDate >= ? OR tag = ?)", time.Now().UTC().Truncate(24*time.Hour), models.AnnouncementTagTOS)
+		q = q.Where("(expireDate >= ? OR tag = ?)", DateInLocation(time.Now(), nil), models.AnnouncementTagTOS)
 	}
 
 	var total int64
@@ -183,7 +183,7 @@ func (s *AnnouncementService) Update(id uint, in UpdateAnnouncementInput) (model
 		updates["brief"] = *in.Brief
 	}
 	if in.ExpireDate != nil {
-		updates["expireDate"] = *in.ExpireDate
+		updates["expireDate"] = DateInLocation(*in.ExpireDate, nil)
 	}
 	if in.Priority != nil {
 		updates["priority"] = *in.Priority

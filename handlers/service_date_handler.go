@@ -175,15 +175,15 @@ func writeServiceDateError(c *gin.Context, err error) {
 // validateServiceDateWindow rejects past dates and inverted or same-day-spanning windows.
 func (h *ServiceDateHandler) validateServiceDateWindow(date, start, end time.Time) error {
 	loc := h.svc.Location()
-	today := time.Now().In(loc).Truncate(24 * time.Hour)
-	if date.In(loc).Truncate(24 * time.Hour).Before(today) {
+	today := services.DateInLocation(time.Now(), loc)
+	if services.DateInLocation(date, loc).Before(today) {
 		return errors.New("date must not be in the past")
 	}
 	if !start.Before(end) {
 		return errors.New("startTime must be before endTime")
 	}
-	day := start.Truncate(24 * time.Hour)
-	if day.Add(24*time.Hour).Before(end) || !end.Truncate(24*time.Hour).Equal(day) {
+	day := services.DateInLocation(start, loc)
+	if day.AddDate(0, 0, 1).Before(end) || !services.DateInLocation(end, loc).Equal(day) {
 		return errors.New("endTime must fall on the same day as startTime")
 	}
 	return nil

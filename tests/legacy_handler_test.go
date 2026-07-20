@@ -37,7 +37,7 @@ func setupLegacyHandlerRouter(t *testing.T) (*gin.Engine, *gorm.DB, *services.Ti
 		t.Fatalf("migrate: %v", err)
 	}
 
-	ticketSvc := services.NewTicketService(db)
+	ticketSvc := services.NewTicketService(db, nil)
 	serviceDateSvc := services.NewServiceDateService(db, nil)
 	roomSvc := services.NewRoomService(db)
 	announceSvc := services.NewAnnouncementService(db)
@@ -123,7 +123,7 @@ func TestLegacy_TOS_NotFound(t *testing.T) {
 
 func TestLegacy_CreateRecord_OldShape(t *testing.T) {
 	r, db, _ := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 
 	body := map[string]any{
 		"realname":         "张三",
@@ -167,7 +167,7 @@ func TestLegacy_CreateRecord_OldShape(t *testing.T) {
 
 func TestLegacy_ListRecords_DRFEnvelope(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	// Seed a record
 	if _, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
@@ -226,7 +226,7 @@ func TestLegacy_Working_Empty(t *testing.T) {
 
 func TestLegacy_Working_Found(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	if _, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -260,7 +260,7 @@ func TestLegacy_Working_Found(t *testing.T) {
 
 func TestLegacy_Finish_Envelope(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	// Seed a completed record
 	if _, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
@@ -292,7 +292,7 @@ func TestLegacy_Finish_Envelope(t *testing.T) {
 
 func TestLegacy_GetRecord(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	rec, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -321,7 +321,7 @@ func TestLegacy_GetRecord(t *testing.T) {
 
 func TestLegacy_UpdateRecord(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	rec, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -351,7 +351,7 @@ func TestLegacy_UpdateRecord(t *testing.T) {
 
 func TestLegacy_DeleteRecord(t *testing.T) {
 	r, db, svc := setupLegacyHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	rec, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",

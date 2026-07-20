@@ -34,8 +34,10 @@ func setupTicketTestDB(t *testing.T) *gorm.DB {
 }
 
 // seedOpenServiceDate inserts (idempotently) a Room named "中关村" and a
-// ServiceDate on `date` with the given capacity. Returns the room id.
-func seedOpenServiceDate(t *testing.T, db *gorm.DB, date time.Time, capacity uint) uint {
+// ServiceDate on `date` with the given capacity. The date is normalized using
+// the same timezone-aware rule as the service layer so that lookup keys match.
+// Returns the room id.
+func seedOpenServiceDate(t *testing.T, db *gorm.DB, loc *time.Location, date time.Time, capacity uint) uint {
 	t.Helper()
 	var room models.ClinicRoom
 	if err := db.Where("name = ?", "中关村").First(&room).Error; err != nil {
@@ -50,7 +52,7 @@ func seedOpenServiceDate(t *testing.T, db *gorm.DB, date time.Time, capacity uin
 	d := models.ClinicServiceDate{
 		Capacity:  capacity,
 		RoomID:    &room.ID,
-		Date:      date.Truncate(24 * time.Hour),
+		Date:      services.DateInLocation(date, loc),
 		StartTime: date.Add(9 * time.Hour),
 		EndTime:   date.Add(17 * time.Hour),
 		Title:     "open",
@@ -67,8 +69,8 @@ func futureTruncatedDate(days int) time.Time {
 
 func TestTicketService_Create_HappyPath(t *testing.T) {
 	db := setupTicketTestDB(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-	svc := services.NewTicketService(db)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+	svc := services.NewTicketService(db, nil)
 
 	rec, err := svc.Create(services.CreateTicketInput{
 		User:            "1120221234",
@@ -104,14 +106,14 @@ func TestTicketService_Create_ValidationBranches(t *testing.T) {
 	}{
 		{
 			name:    "step1 date closed (no service date row)",
-			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, futureTruncatedDate(7), 5) },
+			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5) },
 			input:   services.CreateTicketInput{User: "u", Realname: "r", PhoneNum: "p", Campus: "中关村", AppointmentTime: futureTruncatedDate(8), Description: "d"},
 			wantErr: services.ErrTicketDateClosed,
 		},
 		{
 			name: "step2 no capacity",
 			seed: func(t *testing.T, db *gorm.DB) {
-				roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 1)
+				roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 1)
 				existing := models.ClinicRecord{User: "other", Realname: "x", PhoneNum: "p", Status: models.RecordStatusPending, AppointmentTime: futureTruncatedDate(7), QuestionDesc: "x", RoomID: roomID}
 				if err := db.Create(&existing).Error; err != nil {
 					t.Fatalf("seed: %v", err)
@@ -123,8 +125,8 @@ func TestTicketService_Create_ValidationBranches(t *testing.T) {
 		{
 			name: "step3 one working per user",
 			seed: func(t *testing.T, db *gorm.DB) {
-				roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-				seedOpenServiceDate(t, db, futureTruncatedDate(14), 5)
+				roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+				seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(14), 5)
 				existing := models.ClinicRecord{User: "u", Realname: "x", PhoneNum: "p", Status: models.RecordStatusPending, AppointmentTime: futureTruncatedDate(14), QuestionDesc: "x", RoomID: roomID}
 				if err := db.Create(&existing).Error; err != nil {
 					t.Fatalf("seed: %v", err)
@@ -135,13 +137,13 @@ func TestTicketService_Create_ValidationBranches(t *testing.T) {
 		},
 		{
 			name:    "step4 past appointment time",
-			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, futureTruncatedDate(-1), 5) },
+			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(-1), 5) },
 			input:   services.CreateTicketInput{User: "u", Realname: "r", PhoneNum: "p", Campus: "中关村", AppointmentTime: futureTruncatedDate(-1), Description: "d"},
 			wantErr: services.ErrTicketPastTime,
 		},
 		{
 			name:    "campus does not exist",
-			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, futureTruncatedDate(7), 5) },
+			seed:    func(t *testing.T, db *gorm.DB) { seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5) },
 			input:   services.CreateTicketInput{User: "u", Realname: "r", PhoneNum: "p", Campus: "不存在", AppointmentTime: futureTruncatedDate(7), Description: "d"},
 			wantErr: services.ErrTicketRoomMissing,
 		},
@@ -151,7 +153,7 @@ func TestTicketService_Create_ValidationBranches(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupTicketTestDB(t)
 			tc.seed(t, db)
-			svc := services.NewTicketService(db)
+			svc := services.NewTicketService(db, nil)
 			_, err := svc.Create(tc.input)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
@@ -160,14 +162,58 @@ func TestTicketService_Create_ValidationBranches(t *testing.T) {
 	}
 }
 
+func TestTicketService_Create_TodayInTimezone(t *testing.T) {
+	db := setupTicketTestDB(t)
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	svc := services.NewTicketService(db, loc)
+
+	// Simulate a service date created for today's local date in UTC+8.
+	now := time.Now().In(loc)
+	todayLocal := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	inputDate := todayLocal.UTC() // what the customer frontend sends
+
+	roomID := seedOpenServiceDate(t, db, loc, inputDate, 5)
+
+	_, err := svc.Create(services.CreateTicketInput{
+		User:            "u",
+		Realname:        "r",
+		PhoneNum:        "p",
+		Campus:          "中关村",
+		AppointmentTime: inputDate,
+		Description:     "d",
+	})
+	if err != nil {
+		t.Fatalf("booking for today in UTC+8 should succeed: %v", err)
+	}
+
+	// Booking for yesterday should still be rejected.
+	yesterdayLocal := todayLocal.AddDate(0, 0, -1)
+	yesterdayInput := yesterdayLocal.UTC()
+	seedOpenServiceDate(t, db, loc, yesterdayInput, 5)
+	_, err = svc.Create(services.CreateTicketInput{
+		User:            "u2",
+		Realname:        "r2",
+		PhoneNum:        "p2",
+		Campus:          "中关村",
+		AppointmentTime: yesterdayInput,
+		Description:     "d",
+	})
+	if !errors.Is(err, services.ErrTicketPastTime) {
+		t.Fatalf("booking for yesterday should be rejected with ErrTicketPastTime, got %v", err)
+	}
+
+	// Prevent the yesterday booking from affecting capacity by using a different room.
+	_ = roomID
+}
+
 func TestTicketService_Create_CapacityExcludesRejected(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 1)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 1)
 	rejected := models.ClinicRecord{User: "other", Realname: "x", PhoneNum: "p", Status: models.RecordStatusRejected, AppointmentTime: futureTruncatedDate(7), QuestionDesc: "x", RoomID: roomID}
 	if err := db.Create(&rejected).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	svc := services.NewTicketService(db)
+	svc := services.NewTicketService(db, nil)
 	_, err := svc.Create(services.CreateTicketInput{
 		User: "u", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -179,8 +225,8 @@ func TestTicketService_Create_CapacityExcludesRejected(t *testing.T) {
 
 func TestTicketService_Working(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-	svc := services.NewTicketService(db)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+	svc := services.NewTicketService(db, nil)
 
 	if rec, err := svc.Working("u"); err != nil || rec != nil {
 		t.Fatalf("expected nil/no-err, got rec=%v err=%v", rec, err)
@@ -222,8 +268,8 @@ func TestTicketService_Working(t *testing.T) {
 
 func TestTicketService_List_HidesExpiredWorking(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(-1), 5)
-	svc := services.NewTicketService(db)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(-1), 5)
+	svc := services.NewTicketService(db, nil)
 
 	// A pending record whose appointment_time is in the past — should be hidden.
 	expired := models.ClinicRecord{User: "u", Realname: "r", PhoneNum: "p", Status: models.RecordStatusPending, AppointmentTime: futureTruncatedDate(-1), QuestionDesc: "x", RoomID: roomID}
@@ -247,8 +293,8 @@ func TestTicketService_List_HidesExpiredWorking(t *testing.T) {
 
 func TestTicketService_Finished_OnlyClosedStatuses(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-	svc := services.NewTicketService(db)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+	svc := services.NewTicketService(db, nil)
 
 	closed := []models.RecordStatus{models.RecordStatusRejected, models.RecordStatusCompleted, models.RecordStatusReferred, models.RecordStatusNoShow}
 	open := []models.RecordStatus{models.RecordStatusPending, models.RecordStatusConfirmed, models.RecordStatusArrived, models.RecordStatusInProgress}
@@ -276,12 +322,12 @@ func TestTicketService_Finished_OnlyClosedStatuses(t *testing.T) {
 
 func TestTicketService_GetForUser_Ownership(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	r := models.ClinicRecord{User: "alice", Realname: "r", PhoneNum: "p", Status: models.RecordStatusPending, AppointmentTime: futureTruncatedDate(7), QuestionDesc: "x", RoomID: roomID}
 	if err := db.Create(&r).Error; err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	svc := services.NewTicketService(db)
+	svc := services.NewTicketService(db, nil)
 	if _, err := svc.GetForUser(r.ID, "alice"); err != nil {
 		t.Errorf("owner get: %v", err)
 	}
@@ -296,8 +342,8 @@ func TestTicketService_GetForUser_Ownership(t *testing.T) {
 func TestTicketService_Delete(t *testing.T) {
 	t.Run("ok when service date exists", func(t *testing.T) {
 		db := setupTicketTestDB(t)
-		roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-		svc := services.NewTicketService(db)
+		roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+		svc := services.NewTicketService(db, nil)
 		rec, err := svc.Create(services.CreateTicketInput{
 			User: "u", Realname: "r", PhoneNum: "p", Campus: "中关村",
 			AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -323,8 +369,8 @@ func TestTicketService_Delete(t *testing.T) {
 
 	t.Run("400 when service date row removed", func(t *testing.T) {
 		db := setupTicketTestDB(t)
-		roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-		svc := services.NewTicketService(db)
+		roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+		svc := services.NewTicketService(db, nil)
 		rec, err := svc.Create(services.CreateTicketInput{
 			User: "u", Realname: "r", PhoneNum: "p", Campus: "中关村",
 			AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -344,8 +390,8 @@ func TestTicketService_Delete(t *testing.T) {
 
 func TestTicketService_View_Shape(t *testing.T) {
 	db := setupTicketTestDB(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
-	svc := services.NewTicketService(db)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
+	svc := services.NewTicketService(db, nil)
 	rec, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "张三", PhoneNum: "13800138000", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "笔电不开机",

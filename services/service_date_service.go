@@ -31,6 +31,18 @@ func defaultServiceDateLocation() *time.Location {
 	return time.FixedZone("UTC+8", 8*60*60)
 }
 
+// DateInLocation returns the local calendar day of t in loc as 00:00:00 UTC.
+// This treats the stored date as a wall-clock date in the configured clinic
+// timezone; for example 2026-07-20 00:00:00+00:00 is interpreted as the UTC+8
+// date 2026-07-20, regardless of any offset on the input.
+func DateInLocation(t time.Time, loc *time.Location) time.Time {
+	if loc == nil {
+		loc = defaultServiceDateLocation()
+	}
+	lt := t.In(loc)
+	return time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // NewServiceDateService creates a new ServiceDateService.
 // If loc is nil, UTC+8 is used as the default timezone.
 func NewServiceDateService(db *gorm.DB, loc *time.Location) *ServiceDateService {
@@ -71,7 +83,7 @@ type ListServiceDateFilter struct {
 	RoomID      *uint
 	FromDate    time.Time      // inclusive lower bound on date, zero means unbounded
 	ActiveOnly  bool           // date >= today
-	TodayLoc    *time.Location // timezone used for "today"; nil means UTC
+	TodayLoc    *time.Location // timezone used for "today"; nil means use the service's configured location
 	HasCapacity bool           // for students: booked count < capacity
 	Page        int
 	PageSize    int
@@ -84,7 +96,7 @@ func (s *ServiceDateService) Create(in CreateServiceDateInput) (models.ClinicSer
 	d := models.ClinicServiceDate{
 		Capacity:  in.Capacity,
 		RoomID:    &in.RoomID,
-		Date:      in.Date,
+		Date:      DateInLocation(in.Date, s.loc),
 		StartTime: in.StartTime,
 		EndTime:   in.EndTime,
 		Title:     in.Title,
@@ -128,7 +140,7 @@ func (s *ServiceDateService) assertRoomExists(roomID uint) error {
 // clinic is open on a requested appointment day.
 func (s *ServiceDateService) GetByDateAndRoom(roomID uint, date time.Time) (models.ClinicServiceDate, error) {
 	var d models.ClinicServiceDate
-	if err := s.db.Where("room_id = ? AND date = ?", roomID, date.Truncate(24*time.Hour)).First(&d).Error; err != nil {
+	if err := s.db.Where("room_id = ? AND date = ?", roomID, DateInLocation(date, s.loc)).First(&d).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return models.ClinicServiceDate{}, ErrServiceDateNotFound
 		}
@@ -141,7 +153,7 @@ func (s *ServiceDateService) GetByDateAndRoom(roomID uint, date time.Time) (mode
 func (s *ServiceDateService) recordsExistFor(tx *gorm.DB, roomID uint, date time.Time) (bool, error) {
 	var n int64
 	q := tx.Model(&models.ClinicRecord{}).
-		Where("room = ? AND appointment_time = ?", roomID, date.Truncate(24*time.Hour))
+		Where("room = ? AND appointment_time = ?", roomID, DateInLocation(date, s.loc))
 	if err := q.Count(&n).Error; err != nil {
 		return false, fmt.Errorf("count records for service date: %w", err)
 	}
@@ -154,7 +166,7 @@ func (s *ServiceDateService) bookedCount(roomID *uint, date time.Time) (int64, e
 	var n int64
 	q := s.db.Model(&models.ClinicRecord{}).
 		Where("room = ? AND appointment_time = ? AND status NOT IN ?",
-			roomID, date.Truncate(24*time.Hour),
+			roomID, DateInLocation(date, s.loc),
 			[]models.RecordStatus{models.RecordStatusRejected, models.RecordStatusNoShow})
 	if err := q.Count(&n).Error; err != nil {
 		return 0, fmt.Errorf("count booked: %w", err)
@@ -168,14 +180,14 @@ func (s *ServiceDateService) List(f ListServiceDateFilter) ([]models.ClinicServi
 		q = q.Where("room_id = ?", *f.RoomID)
 	}
 	if !f.FromDate.IsZero() {
-		q = q.Where("date >= ?", f.FromDate.Truncate(24*time.Hour))
+		q = q.Where("date >= ?", DateInLocation(f.FromDate, s.loc))
 	}
 	if f.ActiveOnly {
-		today := time.Now().UTC().Truncate(24 * time.Hour)
+		loc := s.loc
 		if f.TodayLoc != nil {
-			today = time.Now().In(f.TodayLoc).Truncate(24 * time.Hour)
+			loc = f.TodayLoc
 		}
-		q = q.Where("date >= ?", today)
+		q = q.Where("date >= ?", DateInLocation(time.Now(), loc))
 	}
 
 	var total int64
@@ -225,7 +237,7 @@ func (s *ServiceDateService) Update(id uint, in UpdateServiceDateInput) (models.
 	}
 
 	originalRoomID := *d.RoomID
-	originalDate := d.Date.Truncate(24 * time.Hour)
+	originalDate := DateInLocation(d.Date, s.loc)
 	effectiveRoomID := originalRoomID
 	effectiveDate := originalDate
 	if in.RoomID != nil {
@@ -235,7 +247,7 @@ func (s *ServiceDateService) Update(id uint, in UpdateServiceDateInput) (models.
 		effectiveRoomID = *in.RoomID
 	}
 	if in.Date != nil {
-		effectiveDate = in.Date.Truncate(24 * time.Hour)
+		effectiveDate = DateInLocation(*in.Date, s.loc)
 	}
 
 	roomChanged := effectiveRoomID != originalRoomID
@@ -275,7 +287,7 @@ func (s *ServiceDateService) Update(id uint, in UpdateServiceDateInput) (models.
 		updates["room_id"] = *in.RoomID
 	}
 	if in.Date != nil {
-		updates["date"] = *in.Date
+		updates["date"] = DateInLocation(*in.Date, s.loc)
 	}
 	if in.StartTime != nil {
 		updates["startTime"] = *in.StartTime

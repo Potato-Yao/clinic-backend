@@ -141,6 +141,67 @@ func TestServiceDateService_List_Filter(t *testing.T) {
 	})
 }
 
+func TestServiceDateService_GetByDateAndRoom_NonMidnightInput(t *testing.T) {
+	db := setupServiceDateServiceDB(t)
+	svc := services.NewServiceDateService(db, nil)
+
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	localDay := time.Date(2026, 7, 20, 0, 0, 0, 0, loc)
+	inputDate := localDay.UTC() // what the admin frontend sends for local 7.20
+
+	mustCreateServiceDate(t, db, svc, services.CreateServiceDateInput{
+		Capacity:  5,
+		RoomID:    1,
+		Date:      inputDate,
+		StartTime: inputDate,
+		EndTime:   inputDate.Add(2 * time.Hour),
+		Title:     "Open",
+	})
+
+	_, err := svc.GetByDateAndRoom(1, inputDate)
+	if err != nil {
+		t.Fatalf("lookup with non-midnight input should find stored date: %v", err)
+	}
+}
+
+func TestServiceDateService_List_ActiveOnly_TodayInTimezone(t *testing.T) {
+	db := setupServiceDateServiceDB(t)
+	svc := services.NewServiceDateService(db, nil)
+
+	loc := time.FixedZone("UTC+8", 8*60*60)
+	now := time.Now().In(loc)
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	yesterday := today.AddDate(0, 0, -1)
+	tomorrow := today.AddDate(0, 0, 1)
+
+	createLocalDate := func(localDay time.Time) {
+		inputDate := localDay.UTC() // frontend sends UTC ISO of local midnight
+		mustCreateServiceDate(t, db, svc, services.CreateServiceDateInput{
+			Capacity:  5,
+			RoomID:    1,
+			Date:      inputDate,
+			StartTime: inputDate,
+			EndTime:   inputDate.Add(2 * time.Hour),
+			Title:     "Open",
+		})
+	}
+
+	createLocalDate(yesterday)
+	createLocalDate(today)
+	createLocalDate(tomorrow)
+
+	items, total, err := svc.List(services.ListServiceDateFilter{ActiveOnly: true, TodayLoc: loc})
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 active items (today and tomorrow), got %d", total)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+}
+
 func TestServiceDateService_List_HasCapacity(t *testing.T) {
 	db := setupServiceDateServiceDB(t)
 	svc := services.NewServiceDateService(db, nil)

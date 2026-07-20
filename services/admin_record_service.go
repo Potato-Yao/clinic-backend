@@ -65,10 +65,10 @@ func (s *AdminRecordService) List(f ListAdminRecordFilter) ([]AdminRecordView, i
 		q = q.Where("room = ?", *f.RoomID)
 	}
 	if f.FromDate != nil {
-		q = q.Where("appointment_time >= ?", f.FromDate.Truncate(24*time.Hour))
+		q = q.Where("appointment_time >= ?", DateInLocation(*f.FromDate, nil))
 	}
 	if f.ToDate != nil {
-		q = q.Where("appointment_time <= ?", f.ToDate.Truncate(24*time.Hour))
+		q = q.Where("appointment_time <= ?", DateInLocation(*f.ToDate, nil))
 	}
 
 	var total int64

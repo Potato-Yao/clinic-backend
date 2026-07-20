@@ -38,7 +38,7 @@ func setupTicketHandlerRouter(t *testing.T) (*gin.Engine, *gorm.DB, *services.Ti
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	svc := services.NewTicketService(db)
+	svc := services.NewTicketService(db, nil)
 	h := handlers.NewTicketHandler(svc)
 
 	r := gin.New()
@@ -82,7 +82,7 @@ func signedTicketReq(method, path string, body any, user string) *http.Request {
 
 func TestTicketHandler_Create_HappyPath(t *testing.T) {
 	r, db, _ := setupTicketHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 
 	body := map[string]any{
 		"realname":         "张三",
@@ -165,7 +165,7 @@ func TestTicketHandler_Working_Empty(t *testing.T) {
 
 func TestTicketHandler_Working_Found(t *testing.T) {
 	r, db, svc := setupTicketHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	if _, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -192,7 +192,7 @@ func TestTicketHandler_Working_Found(t *testing.T) {
 
 func TestTicketHandler_Get_Forbidden(t *testing.T) {
 	r, db, _ := setupTicketHandlerRouter(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	rec := models.ClinicRecord{User: "alice", Realname: "r", PhoneNum: "p", Status: models.RecordStatusPending, AppointmentTime: futureTruncatedDate(7), QuestionDesc: "x", RoomID: roomID}
 	if err := db.Create(&rec).Error; err != nil {
 		t.Fatalf("seed: %v", err)
@@ -227,7 +227,7 @@ func TestTicketHandler_Delete_NoAuth(t *testing.T) {
 
 func TestTicketHandler_Delete_OK(t *testing.T) {
 	r, db, svc := setupTicketHandlerRouter(t)
-	seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	rec, err := svc.Create(services.CreateTicketInput{
 		User: "1120221234", Realname: "r", PhoneNum: "p", Campus: "中关村",
 		AppointmentTime: futureTruncatedDate(7), Description: "d",
@@ -245,7 +245,7 @@ func TestTicketHandler_Delete_OK(t *testing.T) {
 
 func TestTicketHandler_List_FinishedEnvelop(t *testing.T) {
 	r, db, _ := setupTicketHandlerRouter(t)
-	roomID := seedOpenServiceDate(t, db, futureTruncatedDate(7), 5)
+	roomID := seedOpenServiceDate(t, db, time.UTC, futureTruncatedDate(7), 5)
 	finished := models.ClinicRecord{User: "1120221234", Realname: "r", PhoneNum: "p", Status: models.RecordStatusCompleted, AppointmentTime: futureTruncatedDate(7), QuestionDesc: "x", RoomID: roomID}
 	if err := db.Create(&finished).Error; err != nil {
 		t.Fatalf("seed: %v", err)

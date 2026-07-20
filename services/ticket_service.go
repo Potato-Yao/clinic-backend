@@ -50,11 +50,21 @@ var capacityExcludeStatuses = []models.RecordStatus{models.RecordStatusRejected}
 
 // TicketService implements the customer-facing booking flow.
 type TicketService struct {
-	db *gorm.DB
+	db  *gorm.DB
+	loc *time.Location
 }
 
-func NewTicketService(db *gorm.DB) *TicketService {
-	return &TicketService{db: db}
+func NewTicketService(db *gorm.DB, loc *time.Location) *TicketService {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return &TicketService{db: db, loc: loc}
+}
+
+// todayCutoff returns 00:00:00 UTC for the current calendar day in the service
+// timezone. This matches the canonical UTC-midnight storage used for dates.
+func (s *TicketService) todayCutoff() time.Time {
+	return DateInLocation(time.Now(), s.loc)
 }
 
 // CreateTicketInput is the customer-writable subset of a record. Server-controlled
@@ -99,7 +109,7 @@ func (s *TicketService) Create(in CreateTicketInput) (models.ClinicRecord, error
 	if in.AppointmentTime.IsZero() {
 		return models.ClinicRecord{}, ErrTicketInvalidDate
 	}
-	date := in.AppointmentTime.UTC().Truncate(24 * time.Hour)
+	date := DateInLocation(in.AppointmentTime, s.loc)
 
 	if err := s.validateCreate(in.User, room.ID, date); err != nil {
 		return models.ClinicRecord{}, err
@@ -164,7 +174,7 @@ func (s *TicketService) validateCreate(username string, roomID uint, date time.T
 
 	// STEP 3 — at most one working record per user with a future appointment.
 	var workingCount int64
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	today := s.todayCutoff()
 	if err := s.db.Model(&models.ClinicRecord{}).
 		Where("user = ? AND status IN ? AND appointment_time >= ?", username, workingStatuses, today).
 		Count(&workingCount).Error; err != nil {
@@ -186,7 +196,7 @@ func (s *TicketService) validateCreate(username string, roomID uint, date time.T
 // Order: id DESC (newest first). Paginated.
 func (s *TicketService) List(username string, f ListTicketFilter) ([]models.ClinicRecord, int64, error) {
 	q := s.db.Model(&models.ClinicRecord{}).Where("user = ?", username)
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	today := s.todayCutoff()
 	q = q.Where("NOT (status IN ? AND appointment_time < ?)", workingStatuses, today)
 
 	var total int64
@@ -299,7 +309,7 @@ func (s *TicketService) UpdateForUser(id uint, username string, in UpdateTicketI
 
 	date := rec.AppointmentTime
 	if in.AppointmentTime != nil {
-		date = in.AppointmentTime.UTC().Truncate(24 * time.Hour)
+		date = DateInLocation(*in.AppointmentTime, s.loc)
 	}
 
 	// Re-validate steps 1, 2, 4 if room or date changed.
@@ -382,7 +392,7 @@ func (s *TicketService) validateUpdate(username string, recordID, roomID uint, d
 	}
 
 	// STEP 4 — no past time.
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	today := s.todayCutoff()
 	if date.Before(today) {
 		return ErrTicketPastTime
 	}
@@ -460,7 +470,7 @@ func (s *TicketService) lookupRoom(name string) (models.ClinicRoom, error) {
 
 func (s *TicketService) lookupServiceDate(roomID uint, date time.Time) (models.ClinicServiceDate, error) {
 	var d models.ClinicServiceDate
-	if err := s.db.Where("room_id = ? AND date = ?", roomID, date.Truncate(24*time.Hour)).First(&d).Error; err != nil {
+	if err := s.db.Where("room_id = ? AND date = ?", roomID, DateInLocation(date, s.loc)).First(&d).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return models.ClinicServiceDate{}, ErrServiceDateNotFound
 		}

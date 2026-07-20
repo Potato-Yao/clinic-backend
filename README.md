@@ -16,7 +16,7 @@ go run fake/fake_cas.go   # runs on :9999
 # 3. Start the backend
 export CLINIC_API_KEY=local-dev-key
 export CAS_SERVER_URL=http://127.0.0.1:9999
-export APP_BASE_URL=http://127.0.0.1:8080
+export APP_BASE_URL=http://127.0.0.1:5173
 export CAS_DEFAULT_REDIRECT=/
 export SESSION_COOKIE_SAMESITE=lax
 

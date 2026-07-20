@@ -56,7 +56,7 @@ func main() {
 	roomSvc := services.NewRoomService(db)
 	roomH := handlers.NewRoomHandler(roomSvc)
 
-	ticketSvc := services.NewTicketService(db)
+	ticketSvc := services.NewTicketService(db, serviceDateLoc)
 	ticketH := handlers.NewTicketHandler(ticketSvc)
 	legacyH := handlers.NewLegacyHandler(ticketSvc, serviceDateSvc, roomSvc, announcementSvc)
 
