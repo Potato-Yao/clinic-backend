@@ -170,7 +170,7 @@ func main() {
 		roomWrite.DELETE("/:id", roomH.Delete)
 	}
 
-	// ── Admin: Records (staff + admin) ────────────────────────────────────
+	// ── Admin: Records (staff can read and perform site operations) ───────
 	records := r.Group("/api/admin/records")
 	records.Use(adminAuth, handlers.RequireStaff)
 	{
@@ -180,7 +180,15 @@ func main() {
 		records.POST("/:id/arrive", adminRecordH.Arrive)
 		records.POST("/:id/in-progress", adminRecordH.InProgress)
 		records.POST("/:id/complete", adminRecordH.Complete)
-		records.POST("/:id/reject", adminRecordH.Reject)
+		records.POST("/:id/refer", adminRecordH.Refer)
+		records.POST("/:id/no-show", adminRecordH.NoShow)
+	}
+	// ── Admin: Records (admin only — approve / reject) ────────────────────
+	recordsAdmin := r.Group("/api/admin/records")
+	recordsAdmin.Use(adminAuth, handlers.RequireAdmin)
+	{
+		recordsAdmin.POST("/:id/confirm", adminRecordH.Confirm)
+		recordsAdmin.POST("/:id/reject", adminRecordH.Reject)
 	}
 
 	// ── Admin: Staff Management (admin only) ──────────────────────────────

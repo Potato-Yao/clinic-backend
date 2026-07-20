@@ -66,16 +66,19 @@ func main() {
 		fmt.Printf("service-date: %s room=%d (id=%d)\n", d.Date.Format("2006-01-02"), *d.RoomID, d.ID)
 	}
 
-	// ── Staff record for the fake CAS user ────────────────────────────────
-	staff := models.ClinicStaff{
-		AccountID: "manualuser",
-		Realname:  "Manual Tester",
-		PhoneNum:  "13800138000",
+	// ── Staff records ────────────────────────────────────────────────────
+	staffList := []models.ClinicStaff{
+		{AccountID: "manualuser", Realname: "Manual Tester", PhoneNum: "13800138000"},
+		{AccountID: "zhangsan", Realname: "张三", PhoneNum: "13900139001"},
+		{AccountID: "lisi", Realname: "李四", PhoneNum: "13900139002"},
+		{AccountID: "wangwu", Realname: "王五", PhoneNum: "13900139003"},
 	}
-	if err := db.Where("account_id = ?", staff.AccountID).FirstOrCreate(&staff).Error; err != nil {
-		log.Fatalf("seed staff: %v", err)
+	for _, s := range staffList {
+		if err := db.Where("account_id = ?", s.AccountID).FirstOrCreate(&s).Error; err != nil {
+			log.Fatalf("seed staff %s: %v", s.AccountID, err)
+		}
+		fmt.Printf("staff: %s (id=%d)\n", s.AccountID, s.ID)
 	}
-	fmt.Printf("staff: %s (id=%d)\n", staff.AccountID, staff.ID)
 
 	// ── Announcement ──────────────────────────────────────────────────────
 	ann := models.ClinicAnnouncement{

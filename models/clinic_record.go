@@ -27,6 +27,7 @@ type ClinicRecord struct {
 	AppointmentTime time.Time    `gorm:"type:date;not null;column:appointment_time" json:"appointment_time"`
 	QuestionDesc    string       `gorm:"size:10000;not null;column:question_desc" json:"question_desc"`
 	RoomID          uint         `gorm:"not null;column:room" json:"room"`
+	ApproverID      *uint        `gorm:"column:approver_id" json:"approver_id"`
 }
 
 // TableName overrides GORM's default pluralized table name.

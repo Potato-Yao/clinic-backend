@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"clinic-backend/models"
 	"clinic-backend/services"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +21,10 @@ func NewAdminRecordHandler(svc *services.AdminRecordService) *AdminRecordHandler
 
 type rejectRecordRequest struct {
 	Reason string `json:"reason" binding:"required"`
+}
+
+type referRecordRequest struct {
+	Reason string `json:"reason"`
 }
 
 func (h *AdminRecordHandler) List(c *gin.Context) {
@@ -76,7 +79,6 @@ func (h *AdminRecordHandler) Get(c *gin.Context) {
 }
 
 type updateRecordRequest struct {
-	Status     *string `json:"status"`
 	WorkerDesc *string `json:"worker_desc"`
 }
 
@@ -95,12 +97,28 @@ func (h *AdminRecordHandler) Update(c *gin.Context) {
 	in := services.UpdateAdminRecordInput{
 		WorkerDesc: req.WorkerDesc,
 	}
-	if req.Status != nil {
-		s := models.RecordStatus(*req.Status)
-		in.Status = &s
-	}
 
 	v, err := h.svc.Update(id, in)
+	if err != nil {
+		writeRecordError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, v)
+}
+
+func (h *AdminRecordHandler) Confirm(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+
+	staff, ok := contextStaff(c)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing staff context"})
+		return
+	}
+
+	v, err := h.svc.MarkConfirmed(id, uint(staff.ID))
 	if err != nil {
 		writeRecordError(c, err)
 		return
@@ -158,13 +176,53 @@ func (h *AdminRecordHandler) Reject(c *gin.Context) {
 		return
 	}
 
+	staff, ok := contextStaff(c)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing staff context"})
+		return
+	}
+
 	var req rejectRecordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	v, err := h.svc.MarkRejected(id, req.Reason)
+	v, err := h.svc.MarkRejected(id, req.Reason, uint(staff.ID))
+	if err != nil {
+		writeRecordError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, v)
+}
+
+func (h *AdminRecordHandler) Refer(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+
+	var req referRecordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	v, err := h.svc.MarkReferred(id, req.Reason)
+	if err != nil {
+		writeRecordError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, v)
+}
+
+func (h *AdminRecordHandler) NoShow(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+
+	v, err := h.svc.MarkNoShow(id)
 	if err != nil {
 		writeRecordError(c, err)
 		return
@@ -175,6 +233,10 @@ func (h *AdminRecordHandler) Reject(c *gin.Context) {
 func writeRecordError(c *gin.Context, err error) {
 	if errors.Is(err, services.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if errors.Is(err, services.ErrRecordInvalidTransition) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

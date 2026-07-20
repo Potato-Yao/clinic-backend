@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	ErrRecordNotFound = errors.New("record not found")
+	ErrRecordNotFound          = errors.New("record not found")
+	ErrRecordInvalidTransition = errors.New("invalid status transition")
 )
 
 type AdminRecordService struct {
@@ -32,7 +33,6 @@ type ListAdminRecordFilter struct {
 }
 
 type UpdateAdminRecordInput struct {
-	Status     *models.RecordStatus
 	WorkerDesc *string
 }
 
@@ -53,6 +53,7 @@ type AdminRecordView struct {
 	ArriveTime      *string `json:"arrive_time,omitempty"`
 	FinishTime      *string `json:"finish_time,omitempty"`
 	WorkerID        *uint   `json:"worker_id,omitempty"`
+	ApproverID      *uint   `json:"approver_id,omitempty"`
 }
 
 func (s *AdminRecordService) List(f ListAdminRecordFilter) ([]AdminRecordView, int64, error) {
@@ -126,40 +127,67 @@ func (s *AdminRecordService) Update(id uint, in UpdateAdminRecordInput) (AdminRe
 
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		var err error
-		updates := map[string]any{}
-		if in.Status != nil {
-			updates["status"] = *in.Status
-		}
-		if len(updates) > 0 {
-			if err := tx.Model(&rec).Updates(updates).Error; err != nil {
-				return fmt.Errorf("update record %d: %w", id, err)
-			}
-		}
-
 		if in.WorkerDesc != nil {
 			var worker models.ClinicRecordWorker
-			err = tx.Where("record_id = ?", rec.ID).First(&worker).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				worker = models.ClinicRecordWorker{
-					RecordID:   rec.ID,
-					WorkerDesc: *in.WorkerDesc,
+			if err := tx.Where("record_id = ?", rec.ID).First(&worker).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					worker = models.ClinicRecordWorker{
+						RecordID:   rec.ID,
+						WorkerDesc: *in.WorkerDesc,
+					}
+					if err := tx.Create(&worker).Error; err != nil {
+						return fmt.Errorf("create record %d worker: %w", id, err)
+					}
+				} else {
+					return fmt.Errorf("get record %d worker: %w", id, err)
 				}
-				if err := tx.Create(&worker).Error; err != nil {
-					return fmt.Errorf("create record %d worker: %w", id, err)
-				}
-			} else if err == nil {
+			} else {
 				if err := tx.Model(&worker).Update("worker_desc", *in.WorkerDesc).Error; err != nil {
 					return fmt.Errorf("update record %d worker: %w", id, err)
 				}
-			} else {
-				return fmt.Errorf("get record %d worker: %w", id, err)
 			}
 		}
 
 		if err := tx.First(&rec, id).Error; err != nil {
 			return fmt.Errorf("reload record %d: %w", id, err)
 		}
+		var err error
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkConfirmed(id uint, approverID uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	if rec.Status != models.RecordStatusPending {
+		return AdminRecordView{}, fmt.Errorf("confirm record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"status":      models.RecordStatusConfirmed,
+			"approver_id": approverID,
+		}
+		if err := tx.Model(&rec).Updates(updates).Error; err != nil {
+			return fmt.Errorf("confirm record %d: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		var err error
 		v, err = s.buildViewTx(tx, rec)
 		return err
 	})
@@ -178,6 +206,10 @@ func (s *AdminRecordService) MarkArrived(id uint) (AdminRecordView, error) {
 		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
 	}
 
+	if rec.Status != models.RecordStatusConfirmed {
+		return AdminRecordView{}, fmt.Errorf("arrive record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&rec).Update("status", models.RecordStatusArrived).Error; err != nil {
@@ -185,8 +217,10 @@ func (s *AdminRecordService) MarkArrived(id uint) (AdminRecordView, error) {
 		}
 
 		var arrival models.ClinicRecordArrival
-		err := tx.Where("record_id = ?", rec.ID).First(&arrival).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("record_id = ?", rec.ID).First(&arrival).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("get record %d arrival: %w", id, err)
+			}
 			arrival = models.ClinicRecordArrival{
 				RecordID:   rec.ID,
 				ArriveTime: time.Now().UTC(),
@@ -194,13 +228,12 @@ func (s *AdminRecordService) MarkArrived(id uint) (AdminRecordView, error) {
 			if err := tx.Create(&arrival).Error; err != nil {
 				return fmt.Errorf("create record %d arrival: %w", id, err)
 			}
-		} else if err != nil {
-			return fmt.Errorf("get record %d arrival: %w", id, err)
 		}
 
 		if err := tx.First(&rec, id).Error; err != nil {
 			return fmt.Errorf("reload record %d: %w", id, err)
 		}
+		var err error
 		v, err = s.buildViewTx(tx, rec)
 		return err
 	})
@@ -219,6 +252,10 @@ func (s *AdminRecordService) MarkInProgress(id uint, workerID uint) (AdminRecord
 		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
 	}
 
+	if rec.Status != models.RecordStatusConfirmed && rec.Status != models.RecordStatusArrived {
+		return AdminRecordView{}, fmt.Errorf("in-progress record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&rec).Update("status", models.RecordStatusInProgress).Error; err != nil {
@@ -226,8 +263,10 @@ func (s *AdminRecordService) MarkInProgress(id uint, workerID uint) (AdminRecord
 		}
 
 		var worker models.ClinicRecordWorker
-		err := tx.Where("record_id = ?", rec.ID).First(&worker).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("record_id = ?", rec.ID).First(&worker).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("get record %d worker: %w", id, err)
+			}
 			worker = models.ClinicRecordWorker{
 				RecordID: rec.ID,
 				WorkerID: workerID,
@@ -235,17 +274,16 @@ func (s *AdminRecordService) MarkInProgress(id uint, workerID uint) (AdminRecord
 			if err := tx.Create(&worker).Error; err != nil {
 				return fmt.Errorf("create record %d worker: %w", id, err)
 			}
-		} else if err == nil {
+		} else {
 			if err := tx.Model(&worker).Update("worker", workerID).Error; err != nil {
 				return fmt.Errorf("update record %d worker: %w", id, err)
 			}
-		} else {
-			return fmt.Errorf("get record %d worker: %w", id, err)
 		}
 
 		if err := tx.First(&rec, id).Error; err != nil {
 			return fmt.Errorf("reload record %d: %w", id, err)
 		}
+		var err error
 		v, err = s.buildViewTx(tx, rec)
 		return err
 	})
@@ -264,6 +302,10 @@ func (s *AdminRecordService) MarkCompleted(id uint) (AdminRecordView, error) {
 		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
 	}
 
+	if rec.Status != models.RecordStatusInProgress {
+		return AdminRecordView{}, fmt.Errorf("complete record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&rec).Update("status", models.RecordStatusCompleted).Error; err != nil {
@@ -271,8 +313,10 @@ func (s *AdminRecordService) MarkCompleted(id uint) (AdminRecordView, error) {
 		}
 
 		var worker models.ClinicRecordWorker
-		err := tx.Where("record_id = ?", rec.ID).First(&worker).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("record_id = ?", rec.ID).First(&worker).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("get record %d worker: %w", id, err)
+			}
 			worker = models.ClinicRecordWorker{
 				RecordID:   rec.ID,
 				FinishTime: time.Now().UTC(),
@@ -280,17 +324,16 @@ func (s *AdminRecordService) MarkCompleted(id uint) (AdminRecordView, error) {
 			if err := tx.Create(&worker).Error; err != nil {
 				return fmt.Errorf("create record %d worker: %w", id, err)
 			}
-		} else if err == nil {
+		} else {
 			if err := tx.Model(&worker).Update("finish_time", time.Now().UTC()).Error; err != nil {
 				return fmt.Errorf("update record %d worker finish_time: %w", id, err)
 			}
-		} else {
-			return fmt.Errorf("get record %d worker: %w", id, err)
 		}
 
 		if err := tx.First(&rec, id).Error; err != nil {
 			return fmt.Errorf("reload record %d: %w", id, err)
 		}
+		var err error
 		v, err = s.buildViewTx(tx, rec)
 		return err
 	})
@@ -300,7 +343,7 @@ func (s *AdminRecordService) MarkCompleted(id uint) (AdminRecordView, error) {
 	return v, nil
 }
 
-func (s *AdminRecordService) MarkRejected(id uint, reason string) (AdminRecordView, error) {
+func (s *AdminRecordService) MarkRejected(id uint, reason string, approverID uint) (AdminRecordView, error) {
 	var rec models.ClinicRecord
 	if err := s.db.First(&rec, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -309,15 +352,25 @@ func (s *AdminRecordService) MarkRejected(id uint, reason string) (AdminRecordVi
 		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
 	}
 
+	if rec.Status != models.RecordStatusPending {
+		return AdminRecordView{}, fmt.Errorf("reject record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
 	var v AdminRecordView
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&rec).Update("status", models.RecordStatusRejected).Error; err != nil {
+		updates := map[string]any{
+			"status":      models.RecordStatusRejected,
+			"approver_id": approverID,
+		}
+		if err := tx.Model(&rec).Updates(updates).Error; err != nil {
 			return fmt.Errorf("mark rejected record %d: %w", id, err)
 		}
 
 		var rejection models.ClinicRecordRejection
-		err := tx.Where("record_id = ?", rec.ID).First(&rejection).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := tx.Where("record_id = ?", rec.ID).First(&rejection).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("get record %d rejection: %w", id, err)
+			}
 			rejection = models.ClinicRecordRejection{
 				RecordID:     rec.ID,
 				RejectReason: reason,
@@ -325,17 +378,99 @@ func (s *AdminRecordService) MarkRejected(id uint, reason string) (AdminRecordVi
 			if err := tx.Create(&rejection).Error; err != nil {
 				return fmt.Errorf("create record %d rejection: %w", id, err)
 			}
-		} else if err == nil {
+		} else {
 			if err := tx.Model(&rejection).Update("reject_reason", reason).Error; err != nil {
 				return fmt.Errorf("update record %d rejection: %w", id, err)
 			}
-		} else {
-			return fmt.Errorf("get record %d rejection: %w", id, err)
 		}
 
 		if err := tx.First(&rec, id).Error; err != nil {
 			return fmt.Errorf("reload record %d: %w", id, err)
 		}
+		var err error
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkReferred(id uint, reason string) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	switch rec.Status {
+	case models.RecordStatusRejected, models.RecordStatusCompleted, models.RecordStatusReferred, models.RecordStatusNoShow:
+		return AdminRecordView{}, fmt.Errorf("refer record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusReferred).Error; err != nil {
+			return fmt.Errorf("mark referred record %d: %w", id, err)
+		}
+
+		var referral models.ClinicRecordReferral
+		if err := tx.Where("record_id = ?", rec.ID).First(&referral).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("get record %d referral: %w", id, err)
+			}
+			referral = models.ClinicRecordReferral{
+				RecordID:       rec.ID,
+				ReferralReason: reason,
+			}
+			if err := tx.Create(&referral).Error; err != nil {
+				return fmt.Errorf("create record %d referral: %w", id, err)
+			}
+		} else {
+			if err := tx.Model(&referral).Update("referral_reason", reason).Error; err != nil {
+				return fmt.Errorf("update record %d referral_reason: %w", id, err)
+			}
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		var err error
+		v, err = s.buildViewTx(tx, rec)
+		return err
+	})
+	if err != nil {
+		return AdminRecordView{}, err
+	}
+	return v, nil
+}
+
+func (s *AdminRecordService) MarkNoShow(id uint) (AdminRecordView, error) {
+	var rec models.ClinicRecord
+	if err := s.db.First(&rec, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdminRecordView{}, ErrRecordNotFound
+		}
+		return AdminRecordView{}, fmt.Errorf("get record %d: %w", id, err)
+	}
+
+	if rec.Status != models.RecordStatusConfirmed {
+		return AdminRecordView{}, fmt.Errorf("no-show record %d: %w (current: %s)", id, ErrRecordInvalidTransition, rec.Status)
+	}
+
+	var v AdminRecordView
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&rec).Update("status", models.RecordStatusNoShow).Error; err != nil {
+			return fmt.Errorf("mark no-show record %d: %w", id, err)
+		}
+
+		if err := tx.First(&rec, id).Error; err != nil {
+			return fmt.Errorf("reload record %d: %w", id, err)
+		}
+		var err error
 		v, err = s.buildViewTx(tx, rec)
 		return err
 	})
@@ -416,6 +551,7 @@ func (s *AdminRecordService) buildViewTx(tx *gorm.DB, rec models.ClinicRecord) (
 		AppointmentTime: rec.AppointmentTime.UTC().Format("2006-01-02"),
 		Description:     rec.QuestionDesc,
 		Campus:          room.Name,
+		ApproverID:      rec.ApproverID,
 	}
 	if hasDevice {
 		v.Model = device.LaptopModel
