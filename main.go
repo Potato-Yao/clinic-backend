@@ -35,6 +35,9 @@ func main() {
 		&models.ClinicRecordRejection{},
 		&models.ClinicRecordReferral{},
 		&models.AuthSession{},
+		&models.ClinicWorkSchedule{},
+		&models.ClinicWorkScheduleWeekday{},
+		&models.ClinicWorkScheduleStaff{},
 	); err != nil {
 		log.Fatalf("failed to migrate: %v", err)
 	}
