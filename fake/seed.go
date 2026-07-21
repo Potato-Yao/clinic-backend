@@ -17,6 +17,18 @@ func main() {
 		log.Fatalf("failed to open database: %v", err)
 	}
 
+	if err := db.AutoMigrate(
+		&models.ClinicAnnouncement{},
+		&models.ClinicServiceDate{},
+		&models.ClinicRoom{},
+		&models.ClinicStaff{},
+		&models.ClinicWorkSchedule{},
+		&models.ClinicWorkScheduleWeekday{},
+		&models.ClinicWorkScheduleStaff{},
+	); err != nil {
+		log.Fatalf("failed to migrate: %v", err)
+	}
+
 	now := time.Now().UTC()
 	today := now.Truncate(24 * time.Hour)
 
@@ -78,6 +90,90 @@ func main() {
 			log.Fatalf("seed staff %s: %v", s.AccountID, err)
 		}
 		fmt.Printf("staff: %s (id=%d)\n", s.AccountID, s.ID)
+	}
+
+	// ── Work schedule ─────────────────────────────────────────────────────
+	weekFromNow := today.AddDate(0, 0, 7)
+	twoWeeksFromNow := today.AddDate(0, 0, 14)
+
+	schedule := models.ClinicWorkSchedule{
+		Name:      "默认排班",
+		StartDate: weekFromNow,
+		EndDate:   twoWeeksFromNow,
+	}
+	if err := db.Where("name = ? AND start_date = ?", schedule.Name, schedule.StartDate).FirstOrCreate(&schedule).Error; err != nil {
+		log.Fatalf("seed work schedule: %v", err)
+	}
+	fmt.Printf("work-schedule: %s (id=%d, %s ~ %s)\n", schedule.Name, schedule.ID, schedule.StartDate.Format("2006-01-02"), schedule.EndDate.Format("2006-01-02"))
+
+	// ── Schedule weekdays ────────────────────────────────────────────────
+	type weekdayDef struct {
+		Weekday   int
+		StartHour int
+		StartMin  int
+		EndHour   int
+		EndMin    int
+		Room      string
+	}
+	weekdayDefs := []weekdayDef{
+		{Weekday: 1, StartHour: 9, StartMin: 0, EndHour: 12, EndMin: 0, Room: "中关村"},
+		{Weekday: 1, StartHour: 14, StartMin: 0, EndHour: 17, EndMin: 0, Room: "沙河"},
+		{Weekday: 3, StartHour: 9, StartMin: 0, EndHour: 12, EndMin: 0, Room: "中关村"},
+		{Weekday: 5, StartHour: 14, StartMin: 0, EndHour: 17, EndMin: 0, Room: "沙河"},
+	}
+
+	// Build a lookup from weekday to the dummy date used for time.Time fields.
+	scheduleStart := weekFromNow
+	var savedWeekdays []models.ClinicWorkScheduleWeekday
+	for _, wd := range weekdayDefs {
+		// Use a placeholder date (the schedule start + weekday offset) for time fields.
+		day := scheduleStart.AddDate(0, 0, wd.Weekday-1)
+		entry := models.ClinicWorkScheduleWeekday{
+			WorkScheduleID: schedule.ID,
+			Weekday:        wd.Weekday,
+			StartTime:      day.Add(time.Duration(wd.StartHour)*time.Hour + time.Duration(wd.StartMin)*time.Minute),
+			EndTime:        day.Add(time.Duration(wd.EndHour)*time.Hour + time.Duration(wd.EndMin)*time.Minute),
+		}
+		var room models.ClinicRoom
+		if err := db.Where("name = ?", wd.Room).First(&room).Error; err != nil {
+			log.Fatalf("seed lookup room %s: %v", wd.Room, err)
+		}
+		entry.RoomID = room.ID
+
+		if err := db.Where("work_schedule_id = ? AND weekday = ? AND room_id = ? AND start_time = ?",
+			entry.WorkScheduleID, entry.Weekday, entry.RoomID, entry.StartTime).
+			FirstOrCreate(&entry).Error; err != nil {
+			log.Fatalf("seed schedule weekday: %v", err)
+		}
+		savedWeekdays = append(savedWeekdays, entry)
+		fmt.Printf("schedule-weekday: weekday=%d room=%s (id=%d)\n", entry.Weekday, wd.Room, entry.ID)
+	}
+
+	// ── Schedule staff assignments ───────────────────────────────────────
+	assignments := map[int][]string{
+		1: {"zhangsan", "lisi"},
+		3: {"wangwu"},
+		5: {"zhangsan", "wangwu"},
+	}
+	for _, weekdayEntry := range savedWeekdays {
+		staffAccounts, ok := assignments[weekdayEntry.Weekday]
+		if !ok {
+			continue
+		}
+		for _, account := range staffAccounts {
+			var staff models.ClinicStaff
+			if err := db.Where("account_id = ?", account).First(&staff).Error; err != nil {
+				log.Fatalf("seed lookup staff %s: %v", account, err)
+			}
+			ss := models.ClinicWorkScheduleStaff{
+				WeekdayID: weekdayEntry.ID,
+				StaffID:   staff.ID,
+			}
+			if err := db.Where("weekday_id = ? AND staff_id = ?", ss.WeekdayID, ss.StaffID).FirstOrCreate(&ss).Error; err != nil {
+				log.Fatalf("seed schedule staff: %v", err)
+			}
+			fmt.Printf("schedule-staff: weekday=%d staff=%s (id=%d)\n", weekdayEntry.Weekday, account, ss.ID)
+		}
 	}
 
 	// ── Announcement ──────────────────────────────────────────────────────
