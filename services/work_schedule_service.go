@@ -143,8 +143,9 @@ func (s *WorkScheduleService) createWeekdaysInTx(tx *gorm.DB, scheduleID uint, i
 		}
 		for _, sid := range pw.staffIDs {
 			if err := tx.Create(&models.ClinicWorkScheduleStaff{
-				WeekdayID: wd.ID,
-				StaffID:   sid,
+				WeekdayID:  wd.ID,
+				StaffID:    sid,
+				ScheduleID: scheduleID,
 			}).Error; err != nil {
 				return fmt.Errorf("create staff assignment: %w", err)
 			}
@@ -402,8 +403,9 @@ func (s *WorkScheduleService) AddStaff(scheduleID uint, in StaffAssignmentInput)
 		return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleStaffNotFound
 	}
 	assign := models.ClinicWorkScheduleStaff{
-		WeekdayID: in.WeekdayID,
-		StaffID:   in.StaffID,
+		WeekdayID:  in.WeekdayID,
+		StaffID:    in.StaffID,
+		ScheduleID: scheduleID,
 	}
 	if err := s.db.Create(&assign).Error; err != nil {
 		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("add staff: %w", err)
@@ -422,7 +424,7 @@ func (s *WorkScheduleService) RemoveStaff(scheduleID uint, in StaffAssignmentInp
 		}
 		return fmt.Errorf("find weekday: %w", err)
 	}
-	res := s.db.Where("weekday_id = ? AND staff_id = ?", in.WeekdayID, in.StaffID).
+	res := s.db.Where("weekday_id = ? AND staff_id = ? AND schedule_id = ?", in.WeekdayID, in.StaffID, scheduleID).
 		Delete(&models.ClinicWorkScheduleStaff{})
 	if err := res.Error; err != nil {
 		return fmt.Errorf("remove staff: %w", err)
@@ -439,12 +441,11 @@ func (s *WorkScheduleService) ListStaff(scheduleID uint) ([]models.ClinicWorkSch
 	}
 	var result []models.ClinicWorkScheduleStaff
 	if err := s.db.
-		Joins("JOIN clinic_work_schedule_weekday ON clinic_work_schedule_weekday.id = clinic_work_schedule_staff.weekday_id").
-		Where("clinic_work_schedule_weekday.work_schedule_id = ?", scheduleID).
+		Where("schedule_id = ?", scheduleID).
 		Preload("Weekday").
 		Preload("Weekday.Room").
 		Preload("Staff").
-		Order("clinic_work_schedule_staff.id ASC").
+		Order("id ASC").
 		Find(&result).Error; err != nil {
 		return nil, fmt.Errorf("list staff: %w", err)
 	}

@@ -232,6 +232,9 @@ func TestWorkScheduleService_GetByID_WithNested(t *testing.T) {
 	if got.Weekdays[0].Staff[0].Staff.ID == 0 {
 		t.Errorf("expected staff preloaded")
 	}
+	if got.Weekdays[0].Staff[0].ScheduleID != created.ID {
+		t.Errorf("expected schedule_id %d, got %d", created.ID, got.Weekdays[0].Staff[0].ScheduleID)
+	}
 }
 
 func TestWorkScheduleService_List_FilterEnabled(t *testing.T) {
@@ -446,6 +449,9 @@ func TestWorkScheduleService_AddStaff_Success(t *testing.T) {
 	if assign.ID == 0 {
 		t.Fatal("expected assignment ID assigned")
 	}
+	if assign.ScheduleID != created.ID {
+		t.Errorf("expected schedule_id %d, got %d", created.ID, assign.ScheduleID)
+	}
 }
 
 func TestWorkScheduleService_AddStaff_WeekdayNotFound(t *testing.T) {
@@ -527,5 +533,68 @@ func TestWorkScheduleService_ListStaff(t *testing.T) {
 	}
 	if len(staff) != 3 {
 		t.Fatalf("expected 3 staff, got %d", len(staff))
+	}
+	for _, s := range staff {
+		if s.ScheduleID != created.ID {
+			t.Errorf("expected schedule_id %d on staff %d, got %d", created.ID, s.ID, s.ScheduleID)
+		}
+	}
+}
+
+func TestWorkScheduleService_StaffInMultipleSchedules(t *testing.T) {
+	db := setupWorkScheduleServiceDB(t)
+	svc := services.NewWorkScheduleService(db)
+	roomID := seedRoom(t, db, "R1")
+	staffID := seedOneStaff(t, db)
+
+	schedule1, err := svc.Create(services.CreateWorkScheduleInput{
+		Name:      "ScheduleA",
+		StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		Weekdays: []services.WeekdayInput{
+			{Weekday: 1, StartTime: "09:00", EndTime: "12:00", RoomID: roomID, StaffIDs: []int{staffID}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create schedule1: %v", err)
+	}
+
+	schedule2, err := svc.Create(services.CreateWorkScheduleInput{
+		Name:      "ScheduleB",
+		StartDate: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		Weekdays: []services.WeekdayInput{
+			{Weekday: 3, StartTime: "13:00", EndTime: "17:00", RoomID: roomID, StaffIDs: []int{staffID}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create schedule2: %v", err)
+	}
+
+	staff1, err := svc.ListStaff(schedule1.ID)
+	if err != nil {
+		t.Fatalf("ListStaff schedule1: %v", err)
+	}
+	staff2, err := svc.ListStaff(schedule2.ID)
+	if err != nil {
+		t.Fatalf("ListStaff schedule2: %v", err)
+	}
+	if len(staff1) != 1 {
+		t.Fatalf("expected 1 staff on schedule1, got %d", len(staff1))
+	}
+	if len(staff2) != 1 {
+		t.Fatalf("expected 1 staff on schedule2, got %d", len(staff2))
+	}
+	if staff1[0].StaffID != staffID {
+		t.Errorf("expected staff_id %d on schedule1, got %d", staffID, staff1[0].StaffID)
+	}
+	if staff2[0].StaffID != staffID {
+		t.Errorf("expected staff_id %d on schedule2, got %d", staffID, staff2[0].StaffID)
+	}
+	if staff1[0].ScheduleID != schedule1.ID {
+		t.Errorf("expected schedule_id %d, got %d", schedule1.ID, staff1[0].ScheduleID)
+	}
+	if staff2[0].ScheduleID != schedule2.ID {
+		t.Errorf("expected schedule_id %d, got %d", schedule2.ID, staff2[0].ScheduleID)
 	}
 }

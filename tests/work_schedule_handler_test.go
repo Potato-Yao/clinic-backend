@@ -267,6 +267,13 @@ func TestWorkScheduleHandler_AddRemoveStaff(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("add staff: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
+	var assign models.ClinicWorkScheduleStaff
+	if err := json.Unmarshal(w.Body.Bytes(), &assign); err != nil {
+		t.Fatalf("decode assign: %v", err)
+	}
+	if assign.ScheduleID != created.ID {
+		t.Errorf("expected schedule_id %d, got %d", created.ID, assign.ScheduleID)
+	}
 
 	// Remove
 	w = doRequest(t, r, http.MethodDelete, "/api/admin/work-schedules/"+itoa(created.ID)+"/staff",
