@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -71,6 +72,11 @@ func (a *KeycloakAuthenticator) Authenticate(tokenStr string) (models.ClinicStaf
 	if err != nil {
 		return models.ClinicStaff{}, "", fmt.Errorf("resolve staff: %w", err)
 	}
+
+	if err := a.staffSvc.UpdateRole(staff.ID, string(role)); err != nil {
+		log.Printf("warning: failed to persist role %s for staff %d: %v", role, staff.ID, err)
+	}
+
 	return staff, role, nil
 }
 

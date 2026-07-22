@@ -6,6 +6,7 @@ type ClinicStaff struct {
 	AccountID string `gorm:"type:text;not null;unique;column:account_id" json:"account_id"`
 	Realname  string `gorm:"size:50;column:realname" json:"realname"`
 	PhoneNum  string `gorm:"size:20;column:phone_num" json:"phone_num"`
+	Role      string `gorm:"size:16;not null;default:'';column:role" json:"role"`
 }
 
 // TableName overrides GORM's default pluralized table name.

@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -83,6 +84,10 @@ func (h *CASAuthHandler) Login(c *gin.Context) {
 	if err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve staff"})
 		return
+	}
+
+	if err := h.cfg.StaffService.UpdateRole(staff.ID, string(role)); err != nil {
+		log.Printf("warning: failed to persist role %s for staff %d: %v", role, staff.ID, err)
 	}
 
 	sessionToken, csrfToken, err := h.cfg.SessionService.Create(staff.ID, string(role), ticket)
