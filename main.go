@@ -48,6 +48,13 @@ func main() {
 	`).Error; err != nil {
 		log.Fatalf("failed to create tos unique index: %v", err)
 	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_enabled_schedule
+		ON clinic_work_schedule(enabled)
+		WHERE enabled = 1
+	`).Error; err != nil {
+		log.Fatalf("failed to create enabled-schedule unique index: %v", err)
+	}
 
 	announcementSvc := services.NewAnnouncementService(db)
 	announcementH := handlers.NewAnnouncementHandler(announcementSvc)
@@ -71,6 +78,9 @@ func main() {
 
 	adminRecordSvc := services.NewAdminRecordService(db)
 	adminRecordH := handlers.NewAdminRecordHandler(adminRecordSvc)
+
+	workScheduleSvc := services.NewWorkScheduleService(db)
+	workScheduleH := handlers.NewWorkScheduleHandler(workScheduleSvc)
 
 	userH := handlers.NewUserHandler()
 
@@ -203,6 +213,25 @@ func main() {
 		staffAdm.POST("", staffH.Create)
 		staffAdm.PUT("/:id", staffH.Update)
 		staffAdm.DELETE("/:id", staffH.Delete)
+	}
+
+	// ── Admin: Work Schedules ─────────────────────────────────────────────
+	wsRead := r.Group("/api/admin/work-schedules")
+	wsRead.Use(adminAuth, handlers.RequireStaff)
+	{
+		wsRead.GET("", workScheduleH.List)
+		wsRead.GET("/:id", workScheduleH.Get)
+	}
+	wsWrite := r.Group("/api/admin/work-schedules")
+	wsWrite.Use(adminAuth, handlers.RequireAdmin)
+	{
+		wsWrite.GET("/all", workScheduleH.ListAll)
+		wsWrite.POST("", workScheduleH.Create)
+		wsWrite.PUT("/:id", workScheduleH.Update)
+		wsWrite.DELETE("/:id", workScheduleH.Delete)
+		wsWrite.GET("/:id/staff", workScheduleH.ListStaff)
+		wsWrite.POST("/:id/staff", workScheduleH.AddStaff)
+		wsWrite.DELETE("/:id/staff", workScheduleH.RemoveStaff)
 	}
 
 	// ── Client routes (API-key signature middleware). ─────────────────────
