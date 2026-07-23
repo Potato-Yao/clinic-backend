@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"clinic-backend/services"
@@ -153,6 +154,47 @@ func (h *WorkScheduleHandler) ListAll(c *gin.Context) {
 		return
 	}
 	paginatedResponse(c, items, total, f.Page, f.PageSize)
+}
+
+func (h *WorkScheduleHandler) ServiceAvailability(c *gin.Context) {
+	from, err := time.Parse(time.RFC3339, c.Query("from"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or missing from"})
+		return
+	}
+	to, err := time.Parse(time.RFC3339, c.Query("to"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid or missing to"})
+		return
+	}
+	if to.Before(from) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "to must not be before from"})
+		return
+	}
+
+	roomIDsStr := c.Query("room_ids")
+	if roomIDsStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing room_ids"})
+		return
+	}
+
+	parts := strings.Split(roomIDsStr, ",")
+	roomIDs := make([]uint, 0, len(parts))
+	for _, p := range parts {
+		id, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid room_id: %s", p)})
+			return
+		}
+		roomIDs = append(roomIDs, uint(id))
+	}
+
+	items, err := h.svc.ServiceAvailability(from, to, roomIDs)
+	if err != nil {
+		writeWorkScheduleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
 func (h *WorkScheduleHandler) Update(c *gin.Context) {

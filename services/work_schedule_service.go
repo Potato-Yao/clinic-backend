@@ -75,6 +75,12 @@ type ListWorkScheduleFilter struct {
 	PageSize int
 }
 
+type ServiceAvailabilityItem struct {
+	RoomID    uint   `json:"room_id"`
+	Date      string `json:"date"`
+	Available bool   `json:"available"`
+}
+
 func parseTimeOnly(s string) (time.Time, error) {
 	layouts := []string{"15:04:05", "15:04"}
 	for _, layout := range layouts {
@@ -569,6 +575,56 @@ func (s *WorkScheduleService) UpdateWeekday(scheduleID uint, in UpdateWeekdayInp
 		return models.ClinicWorkScheduleWeekday{}, err
 	}
 	return wd, nil
+}
+
+func (s *WorkScheduleService) ServiceAvailability(from, to time.Time, roomIDs []uint) ([]ServiceAvailabilityItem, error) {
+	if len(roomIDs) == 0 {
+		return []ServiceAvailabilityItem{}, nil
+	}
+
+	var schedule models.ClinicWorkSchedule
+	if err := s.db.Where("enabled = ?", true).
+		Preload("Weekdays", func(db *gorm.DB) *gorm.DB {
+			return db.Where("room_id IN ?", roomIDs).Preload("Staff")
+		}).
+		First(&schedule).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrWorkScheduleNotFound
+		}
+		return nil, fmt.Errorf("find enabled schedule: %w", err)
+	}
+
+	staffMap := make(map[uint]map[int]bool)
+	for _, wd := range schedule.Weekdays {
+		if len(wd.Staff) == 0 {
+			continue
+		}
+		if _, ok := staffMap[wd.RoomID]; !ok {
+			staffMap[wd.RoomID] = make(map[int]bool)
+		}
+		staffMap[wd.RoomID][wd.Weekday] = true
+	}
+
+	fromDate := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
+	toDate := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
+
+	startDate := time.Date(schedule.StartDate.Year(), schedule.StartDate.Month(), schedule.StartDate.Day(), 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(schedule.EndDate.Year(), schedule.EndDate.Month(), schedule.EndDate.Day(), 0, 0, 0, 0, time.UTC)
+
+	var items []ServiceAvailabilityItem
+	for d := fromDate; !d.After(toDate); d = d.AddDate(0, 0, 1) {
+		inPeriod := !d.Before(startDate) && !d.After(endDate)
+		weekday := int(d.Weekday())
+		for _, roomID := range roomIDs {
+			available := inPeriod && staffMap[roomID][weekday]
+			items = append(items, ServiceAvailabilityItem{
+				RoomID:    roomID,
+				Date:      d.Format("2006-01-02"),
+				Available: available,
+			})
+		}
+	}
+	return items, nil
 }
 
 func (s *WorkScheduleService) ListStaff(scheduleID uint) ([]models.ClinicWorkScheduleStaff, error) {

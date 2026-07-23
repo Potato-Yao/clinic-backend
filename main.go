@@ -230,6 +230,7 @@ func main() {
 	wsWrite.Use(adminAuth, handlers.RequireAdmin)
 	{
 		wsWrite.GET("/all", workScheduleH.ListAll)
+		wsWrite.GET("/service-availability", workScheduleH.ServiceAvailability)
 		wsWrite.POST("", workScheduleH.Create)
 		wsWrite.PUT("/:id", workScheduleH.Update)
 		wsWrite.DELETE("/:id", workScheduleH.Delete)

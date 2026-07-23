@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -53,6 +54,7 @@ func setupWorkScheduleHandlerRouter(t *testing.T) (*gin.Engine, *services.WorkSc
 	})
 	{
 		adminWrite.GET("/all", h.ListAll)
+		adminWrite.GET("/service-availability", h.ServiceAvailability)
 		adminWrite.POST("", h.Create)
 		adminWrite.PUT("/:id", h.Update)
 		adminWrite.DELETE("/:id", h.Delete)
@@ -199,6 +201,107 @@ func TestWorkScheduleHandler_ListAll_Admin(t *testing.T) {
 	}
 	if resp.Total != 2 {
 		t.Fatalf("expected 2 items, got %d", resp.Total)
+	}
+}
+
+func TestWorkScheduleHandler_ServiceAvailability_Success(t *testing.T) {
+	r, svc, db := setupWorkScheduleHandlerRouter(t)
+
+	roomA := seedRoom(t, db, "Room A")
+	roomB := seedRoom(t, db, "Room B")
+	staffID := seedOneStaff(t, db)
+	seedStaffWorkYear(t, db, staffID, 2026)
+
+	_, err := svc.Create(services.CreateWorkScheduleInput{
+		Name:      "Enabled",
+		StartDate: time.Date(2026, 7, 20, 0, 0, 0, 0, time.UTC),
+		EndDate:   time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC),
+		Enabled:   true,
+		Weekdays: []services.WeekdayInput{
+			{Weekday: 1, StartTime: "09:00", EndTime: "12:00", RoomID: roomA, StaffIDs: []int{staffID}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create enabled schedule: %v", err)
+	}
+
+	from := "2026-07-20T00:00:00Z"
+	to := "2026-07-26T00:00:00Z"
+	roomIDs := fmt.Sprintf("%d,%d", roomA, roomB)
+	path := fmt.Sprintf("/api/admin/work-schedules/service-availability?from=%s&to=%s&room_ids=%s", from, to, roomIDs)
+
+	w := doRequest(t, r, http.MethodGet, path, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Items []services.ServiceAvailabilityItem `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	if len(resp.Items) != 14 {
+		t.Fatalf("expected 14 items (7 days × 2 rooms), got %d", len(resp.Items))
+	}
+
+	for _, item := range resp.Items {
+		switch {
+		case item.RoomID == roomA && item.Date == "2026-07-20":
+			if !item.Available {
+				t.Errorf("expected room A on Monday 07-20 to be available")
+			}
+		case item.RoomID == roomA && item.Date == "2026-07-21":
+			if item.Available {
+				t.Errorf("expected room A on Tuesday to be unavailable")
+			}
+		case item.RoomID == roomB:
+			if item.Available {
+				t.Errorf("expected room B on any day to be unavailable")
+			}
+		case item.Date == "2026-07-25" || item.Date == "2026-07-26":
+			if item.Available {
+				t.Errorf("expected weekend to be unavailable (outside period)")
+			}
+		}
+	}
+}
+
+func TestWorkScheduleHandler_ServiceAvailability_NoEnabled(t *testing.T) {
+	r, _, _ := setupWorkScheduleHandlerRouter(t)
+
+	from := "2026-07-20T00:00:00Z"
+	to := "2026-07-20T00:00:00Z"
+	path := fmt.Sprintf("/api/admin/work-schedules/service-availability?from=%s&to=%s&room_ids=1", from, to)
+
+	w := doRequest(t, r, http.MethodGet, path, nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkScheduleHandler_ServiceAvailability_InvalidParams(t *testing.T) {
+	r, _, _ := setupWorkScheduleHandlerRouter(t)
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"missing from", "/api/admin/work-schedules/service-availability?to=2026-07-20T00:00:00Z&room_ids=1"},
+		{"missing to", "/api/admin/work-schedules/service-availability?from=2026-07-20T00:00:00Z&room_ids=1"},
+		{"missing room_ids", "/api/admin/work-schedules/service-availability?from=2026-07-20T00:00:00Z&to=2026-07-26T00:00:00Z"},
+		{"to before from", "/api/admin/work-schedules/service-availability?from=2026-07-26T00:00:00Z&to=2026-07-20T00:00:00Z&room_ids=1"},
+		{"invalid room_id", "/api/admin/work-schedules/service-availability?from=2026-07-20T00:00:00Z&to=2026-07-26T00:00:00Z&room_ids=abc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := doRequest(t, r, http.MethodGet, tt.path, nil)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
