@@ -24,6 +24,8 @@ func setupWorkScheduleServiceDB(t *testing.T) *gorm.DB {
 		&models.ClinicWorkScheduleStaff{},
 		&models.ClinicRoom{},
 		&models.ClinicStaff{},
+		&models.ClinicStaffWorkyear{},
+		&models.ClinicRecordWorker{},
 	); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
@@ -46,6 +48,13 @@ func seedOneStaff(t *testing.T, db *gorm.DB) int {
 		t.Fatalf("seed staff: %v", err)
 	}
 	return s.ID
+}
+
+func seedStaffWorkYear(t *testing.T, db *gorm.DB, staffID int, year int) {
+	t.Helper()
+	if err := db.Create(&models.ClinicStaffWorkyear{StaffID: staffID, WorkYear: year}).Error; err != nil {
+		t.Fatalf("seed staff work year: %v", err)
+	}
 }
 
 func seedStaff(t *testing.T, db *gorm.DB, n int) []int {
@@ -421,6 +430,7 @@ func TestWorkScheduleService_AddStaff_Success(t *testing.T) {
 	svc := services.NewWorkScheduleService(db)
 	roomID := seedRoom(t, db, "R1")
 	staffID := seedOneStaff(t, db)
+	seedStaffWorkYear(t, db, staffID, 2026)
 
 	created, err := svc.Create(services.CreateWorkScheduleInput{
 		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -458,7 +468,8 @@ func TestWorkScheduleService_AddStaff_WeekdayNotFound(t *testing.T) {
 	db := setupWorkScheduleServiceDB(t)
 	svc := services.NewWorkScheduleService(db)
 	roomID := seedRoom(t, db, "R1")
-	_ = roomID
+	staffID := seedOneStaff(t, db)
+	seedStaffWorkYear(t, db, staffID, 2026)
 
 	created, err := svc.Create(services.CreateWorkScheduleInput{
 		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -471,7 +482,7 @@ func TestWorkScheduleService_AddStaff_WeekdayNotFound(t *testing.T) {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	_, err = svc.AddStaff(created.ID, services.StaffAssignmentInput{WeekdayID: 9999, StaffID: 1})
+	_, err = svc.AddStaff(created.ID, services.StaffAssignmentInput{WeekdayID: 9999, StaffID: staffID})
 	if !errors.Is(err, services.ErrWorkScheduleWeekdayNotFound) {
 		t.Fatalf("expected ErrWorkScheduleWeekdayNotFound, got %v", err)
 	}
@@ -596,5 +607,119 @@ func TestWorkScheduleService_StaffInMultipleSchedules(t *testing.T) {
 	}
 	if staff2[0].ScheduleID != schedule2.ID {
 		t.Errorf("expected schedule_id %d, got %d", schedule2.ID, staff2[0].ScheduleID)
+	}
+}
+
+func TestWorkScheduleService_AddStaff_AutoCreateWeekday(t *testing.T) {
+	db := setupWorkScheduleServiceDB(t)
+	svc := services.NewWorkScheduleService(db)
+	roomID := seedRoom(t, db, "R1")
+	staffID := seedOneStaff(t, db)
+	seedStaffWorkYear(t, db, staffID, 2026)
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		// No weekdays — the auto-create path will make one.
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	assign, err := svc.AddStaff(created.ID, services.StaffAssignmentInput{
+		RoomID:  roomID,
+		Weekday: 1,
+		StaffID: staffID,
+	})
+	if err != nil {
+		t.Fatalf("AddStaff auto-create failed: %v", err)
+	}
+	if assign.ID == 0 {
+		t.Fatal("expected assignment ID assigned")
+	}
+	if assign.ScheduleID != created.ID {
+		t.Errorf("expected schedule_id %d, got %d", created.ID, assign.ScheduleID)
+	}
+
+	// Verify the weekday was created with default times.
+	full, err := svc.GetByID(created.ID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if len(full.Weekdays) != 1 {
+		t.Fatalf("expected 1 weekday, got %d", len(full.Weekdays))
+	}
+	wd := full.Weekdays[0]
+	if wd.Weekday != 1 {
+		t.Errorf("expected weekday 1, got %d", wd.Weekday)
+	}
+	if wd.RoomID != roomID {
+		t.Errorf("expected room_id %d, got %d", roomID, wd.RoomID)
+	}
+	expectedStart := "18:30:00"
+	expectedEnd := "21:00:00"
+	if wd.StartTime.Format("15:04:05") != expectedStart {
+		t.Errorf("expected start_time %s, got %s", expectedStart, wd.StartTime.Format("15:04:05"))
+	}
+	if wd.EndTime.Format("15:04:05") != expectedEnd {
+		t.Errorf("expected end_time %s, got %s", expectedEnd, wd.EndTime.Format("15:04:05"))
+	}
+}
+
+func TestWorkScheduleService_AddStaff_StaffNotInWorkYear(t *testing.T) {
+	db := setupWorkScheduleServiceDB(t)
+	svc := services.NewWorkScheduleService(db)
+	roomID := seedRoom(t, db, "R1")
+	staffID := seedOneStaff(t, db)
+	// Give staff a work year that does NOT match the schedule's 2026.
+	seedStaffWorkYear(t, db, staffID, 2025)
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		Weekdays: []services.WeekdayInput{
+			{Weekday: 1, StartTime: "09:00", EndTime: "12:00", RoomID: roomID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	full, err := svc.GetByID(created.ID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	wdID := full.Weekdays[0].ID
+
+	_, err = svc.AddStaff(created.ID, services.StaffAssignmentInput{WeekdayID: wdID, StaffID: staffID})
+	if !errors.Is(err, services.ErrWorkScheduleStaffNotInWorkYear) {
+		t.Fatalf("expected ErrWorkScheduleStaffNotInWorkYear, got %v", err)
+	}
+}
+
+func TestWorkScheduleService_ListValidStaff(t *testing.T) {
+	db := setupWorkScheduleServiceDB(t)
+	svc := services.NewWorkScheduleService(db)
+	staffIDs := seedStaff(t, db, 3)
+	for _, sid := range staffIDs {
+		seedStaffWorkYear(t, db, sid, 2026)
+	}
+	// Give only staff 2 a 2025 year as extra.
+	seedStaffWorkYear(t, db, staffIDs[1], 2025)
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	items, err := svc.ListValidStaff(created.ID)
+	if err != nil {
+		t.Fatalf("ListValidStaff failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 staff valid for 2026, got %d", len(items))
 	}
 }

@@ -232,6 +232,7 @@ func main() {
 		wsWrite.GET("/:id/staff", workScheduleH.ListStaff)
 		wsWrite.POST("/:id/staff", workScheduleH.AddStaff)
 		wsWrite.DELETE("/:id/staff", workScheduleH.RemoveStaff)
+		wsWrite.GET("/:id/valid-staff", workScheduleH.ListValidStaff)
 	}
 
 	// ── Client routes (API-key signature middleware). ─────────────────────

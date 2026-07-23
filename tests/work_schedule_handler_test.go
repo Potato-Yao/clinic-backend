@@ -27,6 +27,8 @@ func setupWorkScheduleHandlerRouter(t *testing.T) (*gin.Engine, *services.WorkSc
 		&models.ClinicWorkScheduleStaff{},
 		&models.ClinicRoom{},
 		&models.ClinicStaff{},
+		&models.ClinicStaffWorkyear{},
+		&models.ClinicRecordWorker{},
 	); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
@@ -57,6 +59,7 @@ func setupWorkScheduleHandlerRouter(t *testing.T) (*gin.Engine, *services.WorkSc
 		adminWrite.POST("/:id/staff", h.AddStaff)
 		adminWrite.DELETE("/:id/staff", h.RemoveStaff)
 		adminWrite.GET("/:id/staff", h.ListStaff)
+		adminWrite.GET("/:id/valid-staff", h.ListValidStaff)
 	}
 	return r, svc, db
 }
@@ -238,6 +241,8 @@ func TestWorkScheduleHandler_AddRemoveStaff(t *testing.T) {
 	roomID := seedRoom(t, db, "R1")
 	staffID := seedOneStaff(t, db)
 
+	seedStaffWorkYear(t, db, staffID, 2026)
+
 	created, err := svc.Create(services.CreateWorkScheduleInput{
 		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
@@ -280,5 +285,35 @@ func TestWorkScheduleHandler_AddRemoveStaff(t *testing.T) {
 		map[string]any{"weekday_id": dbWD.ID, "staff_id": staffID})
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("remove staff: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestWorkScheduleHandler_ListValidStaff(t *testing.T) {
+	r, svc, db := setupWorkScheduleHandlerRouter(t)
+	staffIDs := seedStaff(t, db, 2)
+	for _, sid := range staffIDs {
+		seedStaffWorkYear(t, db, sid, 2026)
+	}
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	w := doRequest(t, r, http.MethodGet, "/api/admin/work-schedules/"+itoa(created.ID)+"/valid-staff", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Items []services.StaffListItem `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
 	}
 }

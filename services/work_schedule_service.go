@@ -11,15 +11,16 @@ import (
 )
 
 var (
-	ErrWorkScheduleNotFound          = errors.New("work schedule not found")
-	ErrWorkScheduleNameTaken         = errors.New("work schedule name already taken")
-	ErrWorkScheduleAlreadyEnabled    = errors.New("there is already an enabled work schedule")
-	ErrWorkScheduleInvalidDateRange  = errors.New("start_date must not be after end_date")
-	ErrWorkScheduleInvalidWeekday    = errors.New("weekday must be between 0 and 6")
-	ErrWorkScheduleInvalidTimeWindow = errors.New("start_time must be before end_time")
-	ErrWorkScheduleRoomNotFound      = errors.New("room not found")
-	ErrWorkScheduleStaffNotFound     = errors.New("staff not found")
-	ErrWorkScheduleWeekdayNotFound   = errors.New("weekday not found")
+	ErrWorkScheduleNotFound           = errors.New("work schedule not found")
+	ErrWorkScheduleNameTaken          = errors.New("work schedule name already taken")
+	ErrWorkScheduleAlreadyEnabled     = errors.New("there is already an enabled work schedule")
+	ErrWorkScheduleInvalidDateRange   = errors.New("start_date must not be after end_date")
+	ErrWorkScheduleInvalidWeekday     = errors.New("weekday must be between 0 and 6")
+	ErrWorkScheduleInvalidTimeWindow  = errors.New("start_time must be before end_time")
+	ErrWorkScheduleRoomNotFound       = errors.New("room not found")
+	ErrWorkScheduleStaffNotFound      = errors.New("staff not found")
+	ErrWorkScheduleStaffNotInWorkYear = errors.New("staff is not assigned to the work year of the schedule")
+	ErrWorkScheduleWeekdayNotFound    = errors.New("weekday not found")
 )
 
 type WorkScheduleService struct {
@@ -57,6 +58,8 @@ type UpdateWorkScheduleInput struct {
 type StaffAssignmentInput struct {
 	WeekdayID uint
 	StaffID   int
+	RoomID    uint
+	Weekday   int
 }
 
 type ListWorkScheduleFilter struct {
@@ -388,13 +391,15 @@ func (s *WorkScheduleService) Delete(id uint) error {
 }
 
 func (s *WorkScheduleService) AddStaff(scheduleID uint, in StaffAssignmentInput) (models.ClinicWorkScheduleStaff, error) {
-	var wd models.ClinicWorkScheduleWeekday
-	if err := s.db.Where("id = ? AND work_schedule_id = ?", in.WeekdayID, scheduleID).First(&wd).Error; err != nil {
+	var sch models.ClinicWorkSchedule
+	if err := s.db.First(&sch, scheduleID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleWeekdayNotFound
+			return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleNotFound
 		}
-		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("find weekday: %w", err)
+		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("find schedule: %w", err)
 	}
+
+	// Validate staff exists.
 	var staffCount int64
 	if err := s.db.Model(&models.ClinicStaff{}).Where("id = ?", in.StaffID).Count(&staffCount).Error; err != nil {
 		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("check staff: %w", err)
@@ -402,8 +407,68 @@ func (s *WorkScheduleService) AddStaff(scheduleID uint, in StaffAssignmentInput)
 	if staffCount == 0 {
 		return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleStaffNotFound
 	}
+
+	// Validate staff is in the schedule's work year.
+	staffSvc := NewStaffService(s.db)
+	ok, err := staffSvc.IsValidForDate(in.StaffID, sch.StartDate)
+	if err != nil {
+		return models.ClinicWorkScheduleStaff{}, err
+	}
+	if !ok {
+		return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleStaffNotInWorkYear
+	}
+
+	// Resolve the weekday slot.
+	var wdID uint
+	if in.WeekdayID > 0 {
+		var wd models.ClinicWorkScheduleWeekday
+		if err := s.db.Where("id = ? AND work_schedule_id = ?", in.WeekdayID, scheduleID).First(&wd).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleWeekdayNotFound
+			}
+			return models.ClinicWorkScheduleStaff{}, fmt.Errorf("find weekday: %w", err)
+		}
+		wdID = wd.ID
+	} else if in.RoomID > 0 {
+		if in.Weekday < 0 || in.Weekday > 6 {
+			return models.ClinicWorkScheduleStaff{}, ErrWorkScheduleInvalidWeekday
+		}
+		var wd models.ClinicWorkScheduleWeekday
+		err := s.db.Where("work_schedule_id = ? AND room_id = ? AND weekday = ?", scheduleID, in.RoomID, in.Weekday).
+			First(&wd).Error
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return models.ClinicWorkScheduleStaff{}, fmt.Errorf("find weekday: %w", err)
+			}
+			// Create a new slot with default times.
+			startTime, _ := parseTimeOnly("18:30")
+			endTime, _ := parseTimeOnly("21:00")
+			wd = models.ClinicWorkScheduleWeekday{
+				WorkScheduleID: scheduleID,
+				Weekday:        in.Weekday,
+				StartTime:      startTime,
+				EndTime:        endTime,
+				RoomID:         in.RoomID,
+			}
+			if err := s.db.Create(&wd).Error; err != nil {
+				return models.ClinicWorkScheduleStaff{}, fmt.Errorf("create weekday: %w", err)
+			}
+		}
+		wdID = wd.ID
+	} else {
+		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("must provide weekday_id or (room_id + weekday)")
+	}
+
+	// Check for existing duplicate assignment.
+	var existing models.ClinicWorkScheduleStaff
+	if err := s.db.Where("weekday_id = ? AND staff_id = ? AND schedule_id = ?", wdID, in.StaffID, scheduleID).
+		Preload("Staff").
+		First(&existing).Error; err == nil {
+		return existing, nil
+	}
+
 	assign := models.ClinicWorkScheduleStaff{
-		WeekdayID:  in.WeekdayID,
+		WeekdayID:  wdID,
 		StaffID:    in.StaffID,
 		ScheduleID: scheduleID,
 	}
@@ -414,6 +479,18 @@ func (s *WorkScheduleService) AddStaff(scheduleID uint, in StaffAssignmentInput)
 		return models.ClinicWorkScheduleStaff{}, fmt.Errorf("reload assignment: %w", err)
 	}
 	return assign, nil
+}
+
+func (s *WorkScheduleService) ListValidStaff(scheduleID uint) ([]StaffListItem, error) {
+	var sch models.ClinicWorkSchedule
+	if err := s.db.First(&sch, scheduleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrWorkScheduleNotFound
+		}
+		return nil, fmt.Errorf("find schedule: %w", err)
+	}
+	staffSvc := NewStaffService(s.db)
+	return staffSvc.ListValidForYear(sch.StartDate.Year())
 }
 
 func (s *WorkScheduleService) RemoveStaff(scheduleID uint, in StaffAssignmentInput) error {

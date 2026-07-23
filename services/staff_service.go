@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"clinic-backend/models"
 
@@ -151,6 +152,56 @@ func (s *StaffService) loadWorkYears(staffIDs []int) (map[int][]int, error) {
 		m[y.StaffID] = append(m[y.StaffID], y.WorkYear)
 	}
 	return m, nil
+}
+
+func (s *StaffService) IsValidForDate(staffID int, date time.Time) (bool, error) {
+	year := date.Year()
+	var count int64
+	if err := s.db.Model(&models.ClinicStaffWorkyear{}).
+		Where("staff_id = ? AND work_year = ?", staffID, year).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("check work year for staff %d: %w", staffID, err)
+	}
+	return count > 0, nil
+}
+
+func (s *StaffService) ListValidForYear(year int) ([]StaffListItem, error) {
+	var rows []models.ClinicStaffWorkyear
+	if err := s.db.Where("work_year = ?", year).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("list work year %d: %w", year, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	staffIDs := make([]int, len(rows))
+	for i, r := range rows {
+		staffIDs[i] = r.StaffID
+	}
+	var staff []models.ClinicStaff
+	if err := s.db.Where("id IN ?", staffIDs).Order("id ASC").Find(&staff).Error; err != nil {
+		return nil, fmt.Errorf("load staff for year %d: %w", year, err)
+	}
+	yearMap, err := s.loadWorkYears(staffIDs)
+	if err != nil {
+		return nil, err
+	}
+	countMap, err := s.loadHandledCounts(staffIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]StaffListItem, 0, len(staff))
+	for _, st := range staff {
+		result = append(result, StaffListItem{
+			ID:           st.ID,
+			AccountID:    st.AccountID,
+			Realname:     st.Realname,
+			PhoneNum:     st.PhoneNum,
+			Role:         st.Role,
+			HandledCount: countMap[st.ID],
+			WorkYears:    yearMap[st.ID],
+		})
+	}
+	return result, nil
 }
 
 func (s *StaffService) UpdateRole(id int, role string) error {

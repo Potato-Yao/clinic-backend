@@ -44,8 +44,10 @@ type updateWorkScheduleRequest struct {
 }
 
 type staffAssignmentRequest struct {
-	WeekdayID uint `json:"weekday_id" binding:"required"`
+	WeekdayID uint `json:"weekday_id"`
 	StaffID   int  `json:"staff_id" binding:"required"`
+	RoomID    uint `json:"room_id"`
+	Weekday   int  `json:"weekday"`
 }
 
 func (h *WorkScheduleHandler) Create(c *gin.Context) {
@@ -227,9 +229,15 @@ func (h *WorkScheduleHandler) AddStaff(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.WeekdayID == 0 && req.RoomID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "must provide weekday_id or (room_id + weekday)"})
+		return
+	}
 	assign, err := h.svc.AddStaff(scheduleID, services.StaffAssignmentInput{
 		WeekdayID: req.WeekdayID,
 		StaffID:   req.StaffID,
+		RoomID:    req.RoomID,
+		Weekday:   req.Weekday,
 	})
 	if err != nil {
 		writeWorkScheduleError(c, err)
@@ -258,6 +266,19 @@ func (h *WorkScheduleHandler) RemoveStaff(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
+func (h *WorkScheduleHandler) ListValidStaff(c *gin.Context) {
+	scheduleID, ok := parseID(c)
+	if !ok {
+		return
+	}
+	staff, err := h.svc.ListValidStaff(scheduleID)
+	if err != nil {
+		writeWorkScheduleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": staff})
+}
+
 func (h *WorkScheduleHandler) ListStaff(c *gin.Context) {
 	scheduleID, ok := parseID(c)
 	if !ok {
@@ -280,6 +301,7 @@ var workScheduleErrorMappings = []errStatus{
 	{services.ErrWorkScheduleInvalidTimeWindow, http.StatusBadRequest},
 	{services.ErrWorkScheduleRoomNotFound, http.StatusNotFound},
 	{services.ErrWorkScheduleStaffNotFound, http.StatusNotFound},
+	{services.ErrWorkScheduleStaffNotInWorkYear, http.StatusBadRequest},
 	{services.ErrWorkScheduleWeekdayNotFound, http.StatusNotFound},
 }
 
