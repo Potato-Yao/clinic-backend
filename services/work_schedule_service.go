@@ -62,6 +62,13 @@ type StaffAssignmentInput struct {
 	Weekday   int
 }
 
+type UpdateWeekdayInput struct {
+	RoomID    uint
+	Weekday   int
+	StartTime string
+	EndTime   string
+}
+
 type ListWorkScheduleFilter struct {
 	Enabled  *bool
 	Page     int
@@ -510,6 +517,58 @@ func (s *WorkScheduleService) RemoveStaff(scheduleID uint, in StaffAssignmentInp
 		return ErrWorkScheduleStaffNotFound
 	}
 	return nil
+}
+
+func (s *WorkScheduleService) UpdateWeekday(scheduleID uint, in UpdateWeekdayInput) (models.ClinicWorkScheduleWeekday, error) {
+	var sch models.ClinicWorkSchedule
+	if err := s.db.First(&sch, scheduleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.ClinicWorkScheduleWeekday{}, ErrWorkScheduleNotFound
+		}
+		return models.ClinicWorkScheduleWeekday{}, fmt.Errorf("get work schedule %d: %w", scheduleID, err)
+	}
+
+	var wd models.ClinicWorkScheduleWeekday
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		pw, err := s.validateWeekdayInTx(tx, WeekdayInput{
+			Weekday:   in.Weekday,
+			StartTime: in.StartTime,
+			EndTime:   in.EndTime,
+			RoomID:    in.RoomID,
+			StaffIDs:  []int{},
+		}, true)
+		if err != nil {
+			return err
+		}
+
+		err = tx.Where("work_schedule_id = ? AND room_id = ? AND weekday = ?", scheduleID, in.RoomID, in.Weekday).
+			First(&wd).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			wd = models.ClinicWorkScheduleWeekday{
+				WorkScheduleID: scheduleID,
+				RoomID:         in.RoomID,
+				Weekday:        in.Weekday,
+				StartTime:      pw.startTime,
+				EndTime:        pw.endTime,
+			}
+			if err := tx.Create(&wd).Error; err != nil {
+				return fmt.Errorf("create weekday: %w", err)
+			}
+		} else if err != nil {
+			return fmt.Errorf("find weekday: %w", err)
+		} else {
+			wd.StartTime = pw.startTime
+			wd.EndTime = pw.endTime
+			if err := tx.Save(&wd).Error; err != nil {
+				return fmt.Errorf("update weekday: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return models.ClinicWorkScheduleWeekday{}, err
+	}
+	return wd, nil
 }
 
 func (s *WorkScheduleService) ListStaff(scheduleID uint) ([]models.ClinicWorkScheduleStaff, error) {

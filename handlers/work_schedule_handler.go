@@ -50,6 +50,13 @@ type staffAssignmentRequest struct {
 	Weekday   int  `json:"weekday"`
 }
 
+type updateWeekdayTimeRequest struct {
+	RoomID    uint   `json:"room_id" binding:"required"`
+	Weekday   int    `json:"weekday" binding:"required"`
+	StartTime string `json:"start_time" binding:"required"`
+	EndTime   string `json:"end_time" binding:"required"`
+}
+
 func (h *WorkScheduleHandler) Create(c *gin.Context) {
 	var req createWorkScheduleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -290,6 +297,29 @@ func (h *WorkScheduleHandler) ListStaff(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": staff})
+}
+
+func (h *WorkScheduleHandler) UpdateWeekday(c *gin.Context) {
+	scheduleID, ok := parseID(c)
+	if !ok {
+		return
+	}
+	var req updateWeekdayTimeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	wd, err := h.svc.UpdateWeekday(scheduleID, services.UpdateWeekdayInput{
+		RoomID:    req.RoomID,
+		Weekday:   req.Weekday,
+		StartTime: req.StartTime,
+		EndTime:   req.EndTime,
+	})
+	if err != nil {
+		writeWorkScheduleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, wd)
 }
 
 var workScheduleErrorMappings = []errStatus{

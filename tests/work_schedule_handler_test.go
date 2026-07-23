@@ -60,6 +60,7 @@ func setupWorkScheduleHandlerRouter(t *testing.T) (*gin.Engine, *services.WorkSc
 		adminWrite.DELETE("/:id/staff", h.RemoveStaff)
 		adminWrite.GET("/:id/staff", h.ListStaff)
 		adminWrite.GET("/:id/valid-staff", h.ListValidStaff)
+		adminWrite.PUT("/:id/weekdays", h.UpdateWeekday)
 	}
 	return r, svc, db
 }
@@ -315,5 +316,71 @@ func TestWorkScheduleHandler_ListValidStaff(t *testing.T) {
 	}
 	if len(resp.Items) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+}
+
+func TestWorkScheduleHandler_UpdateWeekday_Update(t *testing.T) {
+	r, svc, db := setupWorkScheduleHandlerRouter(t)
+	roomID := seedRoom(t, db, "Room A")
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+		Weekdays: []services.WeekdayInput{
+			{Weekday: 1, StartTime: "09:00", EndTime: "12:00", RoomID: roomID, StaffIDs: []int{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/work-schedules/"+itoa(created.ID)+"/weekdays", map[string]any{
+		"room_id":    roomID,
+		"weekday":    1,
+		"start_time": "10:00",
+		"end_time":   "13:00",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got models.ClinicWorkScheduleWeekday
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.StartTime.Format("15:04") != "10:00" || got.EndTime.Format("15:04") != "13:00" {
+		t.Fatalf("unexpected times: start=%v end=%v", got.StartTime, got.EndTime)
+	}
+}
+
+func TestWorkScheduleHandler_UpdateWeekday_Create(t *testing.T) {
+	r, svc, db := setupWorkScheduleHandlerRouter(t)
+	roomID := seedRoom(t, db, "Room B")
+
+	created, err := svc.Create(services.CreateWorkScheduleInput{
+		Name: "Test", StartDate: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	w := doRequest(t, r, http.MethodPut, "/api/admin/work-schedules/"+itoa(created.ID)+"/weekdays", map[string]any{
+		"room_id":    roomID,
+		"weekday":    2,
+		"start_time": "14:00",
+		"end_time":   "17:00",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got models.ClinicWorkScheduleWeekday
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.RoomID != roomID || got.Weekday != 2 {
+		t.Fatalf("unexpected room/weekday: room=%d weekday=%d", got.RoomID, got.Weekday)
+	}
+	if got.StartTime.Format("15:04") != "14:00" || got.EndTime.Format("15:04") != "17:00" {
+		t.Fatalf("unexpected times: start=%v end=%v", got.StartTime, got.EndTime)
 	}
 }
