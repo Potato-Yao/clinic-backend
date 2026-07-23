@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -482,6 +483,46 @@ func (s *AdminRecordService) MarkNoShow(id uint) (AdminRecordView, error) {
 		return AdminRecordView{}, err
 	}
 	return v, nil
+}
+
+func (s *AdminRecordService) CloseExpiredRecords(ctx context.Context, cutoff time.Time) (noShowCount, completedCount int64, err error) {
+	noShowStatuses := []models.RecordStatus{
+		models.RecordStatusPending,
+		models.RecordStatusConfirmed,
+		models.RecordStatusArrived,
+	}
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		r := tx.Model(&models.ClinicRecord{}).
+			Where("appointment_time < ? AND status IN ?", cutoff, noShowStatuses).
+			Update("status", models.RecordStatusNoShow)
+		if r.Error != nil {
+			return fmt.Errorf("mark no-show: %w", r.Error)
+		}
+		noShowCount = r.RowsAffected
+
+		r = tx.Model(&models.ClinicRecord{}).
+			Where("appointment_time < ? AND status = ?", cutoff, models.RecordStatusInProgress).
+			Update("status", models.RecordStatusCompleted)
+		if r.Error != nil {
+			return fmt.Errorf("mark completed: %w", r.Error)
+		}
+		completedCount = r.RowsAffected
+
+		if completedCount > 0 {
+			sub := tx.Model(&models.ClinicRecord{}).
+				Select("id").
+				Where("appointment_time < ? AND status = ?", cutoff, models.RecordStatusCompleted)
+			if err := tx.Model(&models.ClinicRecordWorker{}).
+				Where("record_id IN (?)", sub).
+				Update("finish_time", time.Now().UTC()).Error; err != nil {
+				return fmt.Errorf("update worker finish_time: %w", err)
+			}
+		}
+
+		return nil
+	})
+	return
 }
 
 func (s *AdminRecordService) buildView(rec models.ClinicRecord) (AdminRecordView, error) {

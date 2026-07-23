@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"clinic-backend/handlers"
@@ -331,8 +335,55 @@ func main() {
 	r.GET("/api/users/me", optionalAuth, userH.Me)
 	r.GET("/api/users/me/", optionalAuth, userH.Me)
 
-	if err := r.Run(":8080"); err != nil {
-		log.Fatalf("server failed: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		runCleanup := func() {
+			cutoff := services.DateInLocation(time.Now(), serviceDateLoc)
+			noShow, completed, err := adminRecordSvc.CloseExpiredRecords(ctx, cutoff)
+			if err != nil {
+				log.Printf("cleanup error: %v", err)
+			} else if noShow > 0 || completed > 0 {
+				log.Printf("cleanup: %d no_show, %d completed", noShow, completed)
+			}
+		}
+
+		runCleanup()
+
+		now := time.Now().In(serviceDateLoc)
+		next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, serviceDateLoc)
+		timer := time.NewTimer(time.Until(next))
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				runCleanup()
+				timer.Reset(24 * time.Hour)
+			}
+		}
+	}()
+
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: r,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server failed: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("shutting down gracefully...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("server shutdown error: %v", err)
 	}
 }
 
